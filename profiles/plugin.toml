@@ -1,0 +1,96 @@
+# victor/profiles — plugin estilo "profiles" do Noctalia V4.
+# Salva e aplica perfis completos de personalizacao:
+#   config.toml, settings.toml (widgets, layout, frames/molduras, fontes,
+#   cores, barra, wallpaper) e estado dos plugins instalados.
+#
+# Painel:   noctalia msg panel-toggle victor/profiles:profiles
+# Service:  noctalia msg plugin victor/profiles:service all "save <nome>"
+#
+id = "victor/profiles"
+name = "Profiles"
+version = "1.2.0"
+plugin_api = 46
+author = "victor"
+license = "MIT"
+tags = ["system", "backup", "desktop", "personalization"]
+icon = "save"
+description = "Salva e aplica perfis completos de personalizacao do Noctalia (config, widgets, layout, frames, fontes, cores, wallpaper e plugins)."
+
+[[setting]]
+key = "profiles_dir"
+type = "folder"
+label_key = "settings.profiles_dir.label"
+description_key = "settings.profiles_dir.description"
+default = ""
+
+[[panel]]
+id = "profiles"
+entry = "panel.luau"
+width = 460
+height = 500
+placement = "floating"
+position = "center"
+
+[[service]]
+id = "service"
+entry = "service.luau"
+
+[[service]]
+id = "frames"
+entry = "frames.luau"
+
+[[desktop_widget]]
+id = "sticker"
+entry = "gothic-sticker.luau"
+
+[[desktop_widget.setting]]
+key = "image_path"
+type = "file"
+label_key = "settings.sticker.image_path.label"
+description_key = "settings.sticker.image_path.description"
+default = ""
+
+[[desktop_widget.setting]]
+key = "image_width"
+type = "int"
+label_key = "settings.sticker.image_width.label"
+description_key = "settings.sticker.image_width.description"
+default = 320
+min = 16
+max = 4096
+
+[[desktop_widget.setting]]
+key = "image_height"
+type = "int"
+label_key = "settings.sticker.image_height.label"
+description_key = "settings.sticker.image_height.description"
+default = 320
+min = 16
+max = 4096
+
+[[desktop_widget]]
+id = "label"
+entry = "gothic-label.luau"
+
+[[desktop_widget.setting]]
+key = "title"
+type = "string"
+label_key = "settings.label.title.label"
+description_key = "settings.label.title.description"
+default = ""
+
+[[desktop_widget.setting]]
+key = "font_size"
+type = "int"
+label_key = "settings.label.font_size.label"
+description_key = "settings.label.font_size.description"
+default = 26
+min = 8
+max = 72
+
+[[desktop_widget.setting]]
+key = "font_weight"
+type = "string"
+label_key = "settings.label.font_weight.label"
+description_key = "settings.label.font_weight.description"
+default = "bold"

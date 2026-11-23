@@ -1,0 +1,10 @@
+[Unit]
+Description=Apply gothic frames to Noctalia desktop widgets
+After=noctalia.service
+
+[Service]
+Type=oneshot
+# espera o daemon terminar de escrever o settings.toml
+ExecStartPre=/usr/bin/sleep 2
+ExecStart=%h/.local/bin/noctalia-widget-frames
+Nice=10

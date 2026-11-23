@@ -1,0 +1,36 @@
+{
+  "settings": {
+    "profiles_dir": {
+      "label": "Profiles directory",
+      "description": "Where profiles are stored. Leave empty for ~/.local/state/noctalia/profiles"
+    },
+    "sticker": {
+      "image_path": {
+        "label": "Image path",
+        "description": "Path to the image or GIF to display"
+      },
+      "image_width": {
+        "label": "Image width",
+        "description": "Width of the image area (kept in sync with the widget size)"
+      },
+      "image_height": {
+        "label": "Image height",
+        "description": "Height of the image area (kept in sync with the widget size)"
+      }
+    },
+    "label": {
+      "title": {
+        "label": "Title",
+        "description": "Text shown on the desktop label"
+      },
+      "font_size": {
+        "label": "Font size",
+        "description": "Size of the label text"
+      },
+      "font_weight": {
+        "label": "Font weight",
+        "description": "Weight of the label text"
+      }
+    }
+  }
+}
