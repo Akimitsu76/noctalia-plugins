@@ -14,10 +14,18 @@ local INNER_COLOR = "#8a1230"  -- vermelho escuro
 local OUTER_W = 3
 local INNER_W = 2
 local MATTE = 4
-local FRAME_SCALE = 320       -- resolução dos frames extraídos
-local CACHE_VERSION = 1
+-- 208 é o tamanho do box do adesivo; extrair perto do tamanho exibido evita
+-- redecodificar PNGs grandes a cada troca de frame (era a causa do engasgo).
+local FRAME_SCALE = 208
+local CACHE_VERSION = 2
 
 local dataDir = noctalia.pluginDataDir() or ""
+
+-- Config em estado local: onFrameTick() não deve consultar getConfig() a cada
+-- tick, senão a animação disputa leituras de config com o thread da UI.
+local imagePath = ""
+local imageWidth = 320
+local imageHeight = 320
 
 local gifPath = nil
 local gifFrames = nil
@@ -39,18 +47,25 @@ local function gifCacheDir(path)
 end
 
 local function parseFfmpegDurations(stdout)
-  -- ffprobe devolve o PTS absoluto de cada frame, em segundos.
-  local durations, total, lastMs = {}, 0, 0
+  -- ffprobe devolve o PTS absoluto de cada frame, em segundos. A duração de um
+  -- frame é o intervalo até o próximo PTS; o último repete o anterior.
+  local pts = {}
   for line in stdout:gmatch("[^\r\n]+") do
     local sec = tonumber(line)
-    if sec then
-      local ms = math.floor(sec * 1000)
-      local dur = ms - lastMs
-      lastMs = ms
-      if dur <= 0 then dur = 33 end
-      table.insert(durations, dur)
-      total = total + dur
+    if sec then table.insert(pts, math.floor(sec * 1000)) end
+  end
+
+  local durations, total = {}, 0
+  for i = 1, #pts do
+    local dur = 33
+    if i < #pts then
+      dur = pts[i + 1] - pts[i]
+    elseif i > 1 then
+      dur = pts[i] - pts[i - 1]
     end
+    if dur <= 0 then dur = 33 end
+    table.insert(durations, dur)
+    total = total + dur
   end
   return durations, total
 end
@@ -91,7 +106,7 @@ local function loadGifMetadata(cacheDir, path)
   return true
 end
 
-local function finalizeFrames(cacheDir, frameCount, durations, totalDuration, sourceMtime, sourceSize)
+local function finalizeFrames(path, cacheDir, frameCount, durations, totalDuration, sourceMtime, sourceSize)
   local frames = {}
   for i = 1, frameCount do
     table.insert(frames, string.format("frame-%03d.png", i))
@@ -101,6 +116,7 @@ local function finalizeFrames(cacheDir, frameCount, durations, totalDuration, so
   for _, name in ipairs(frames) do
     table.insert(gifFrames, cacheDir .. "/" .. name)
   end
+  gifPath = path
   gifDurations = durations
   gifTotalDuration = totalDuration
   gifStartTime = noctalia.nowMs()
@@ -126,18 +142,9 @@ local function extractWithFfmpeg(path, cacheDir, sourceMtime, sourceSize)
       frameCount = 1
     end
 
-    local cached = true
-    for i = 1, frameCount do
-      if not noctalia.fileExists(string.format(cacheDir .. "/frame-%03d.png", i)) then
-        cached = false
-        break
-      end
-    end
-    if cached then
-      finalizeFrames(cacheDir, frameCount, durations, totalDuration, sourceMtime, sourceSize)
-      return
-    end
-
+    -- A metadata é autoritativa: se ela falhou (versão diferente, arquivo da
+    -- fonte mudou etc.), refaz os PNGs em vez de reaproveitar frames antigos
+    -- com outra resolução.
     noctalia.runAsync({
       "ffmpeg", "-y", "-i", path,
       "-vf", "scale=" .. FRAME_SCALE .. ":-1:flags=lanczos",
@@ -149,7 +156,7 @@ local function extractWithFfmpeg(path, cacheDir, sourceMtime, sourceSize)
         gifLoading = false
         return
       end
-      finalizeFrames(cacheDir, frameCount, durations, totalDuration, sourceMtime, sourceSize)
+      finalizeFrames(path, cacheDir, frameCount, durations, totalDuration, sourceMtime, sourceSize)
     end)
   end)
 end
@@ -210,18 +217,22 @@ local function currentGifFrame()
   return gifFrames[#gifFrames]
 end
 
-local function drawImage(path, iw, ih)
+local function drawImage(path)
+  local iw = imageWidth - 2 * (OUTER_W + MATTE)
+  local ih = imageHeight - 2 * (OUTER_W + MATTE)
   local image = path ~= "" and ui.image({
+    key = "gothic-sticker-image",
     path = path,
-    width = iw - 2 * (OUTER_W + MATTE),
-    height = ih - 2 * (OUTER_W + MATTE),
+    width = iw,
+    height = ih,
     fit = "stretch",
     radius = 0,
     border = INNER_COLOR,
     borderWidth = INNER_W,
-  }) or ui.glyph({ name = "photo", size = 32, color = "on_surface_variant" })
+  }) or ui.glyph({ key = "gothic-sticker-image", name = "photo", size = 32, color = "on_surface_variant" })
 
   desktopWidget.render(ui.column({
+    key = "gothic-sticker-root",
     fill = "#0c0c10",
     border = OUTER_COLOR,
     borderWidth = OUTER_W,
@@ -233,42 +244,42 @@ local function drawImage(path, iw, ih)
 end
 
 local function render()
-  local path = noctalia.getConfig("image_path") or ""
-  local iw = tonumber(noctalia.getConfig("image_width")) or 320
-  local ih = tonumber(noctalia.getConfig("image_height")) or 320
-
-  if isGif(path) then
-    if gifPath ~= path then extractGifFrames(path) end
-    local frame = currentGifFrame() or path
+  if isGif(imagePath) then
+    if gifPath ~= imagePath then extractGifFrames(imagePath) end
+    local frame = currentGifFrame() or imagePath
     if frame ~= lastRenderedFrame then
       lastRenderedFrame = frame
-      drawImage(frame, iw, ih)
+      drawImage(frame)
     end
     return
   end
   lastRenderedFrame = nil
-  drawImage(path, iw, ih)
+  drawImage(imagePath)
 end
 
 function update()
   desktopWidget.setNeedsFrameTick(true)
-  local path = noctalia.getConfig("image_path") or ""
-  if not isGif(path) then
+
+  -- Config é lida apenas em update(); os ticks só avançam o frame atual.
+  imagePath = noctalia.getConfig("image_path") or ""
+  imageWidth = tonumber(noctalia.getConfig("image_width")) or 320
+  imageHeight = tonumber(noctalia.getConfig("image_height")) or 320
+
+  if not isGif(imagePath) then
     resetGif()
-  elseif gifPath ~= path then
-    extractGifFrames(path)
+  elseif gifPath ~= imagePath then
+    extractGifFrames(imagePath)
   end
   lastRenderedFrame = nil
   render()
 end
 
 function onFrameTick(deltaMs)
-  local path = noctalia.getConfig("image_path") or ""
-  if not isGif(path) or not gifFrames or #gifFrames == 0 then return end
+  if not isGif(imagePath) or not gifFrames or #gifFrames == 0 then return end
   local frame = currentGifFrame()
   if frame and frame ~= lastRenderedFrame then
     lastRenderedFrame = frame
-    render()
+    drawImage(frame)
   end
 end
 

@@ -1,8 +1,8 @@
 [[plugin]]
 id = "victor/profiles"
 name = "Profiles"
-version = "1.5.2"
-updated_at = 1795525579
+version = "1.5.3"
+updated_at = 1795529632
 added_at = 1795450000
 author = "victor"
 license = "MIT"

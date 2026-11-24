@@ -89,8 +89,10 @@ antigos; `PLUGINS_INSTALLED=` é o nome novo.
 - borda externa `#6b0f2a` (3 px) e interna `#8a1230` (2 px), cantos quadrados
 - stickers com proporção livre — largura e altura ajustáveis separadamente
 - **GIFs animados**: o widget extrai os frames com `ffmpeg`/`ffprobe` e troca o
-  frame exibido em `onFrameTick`; o cache fica em `plugins/data/victor/profiles/gif-cache`
-  e é invalidado quando o arquivo muda. Sem `ffmpeg`, o GIF aparece parado;
+  frame exibido em `onFrameTick`; os PNGs são gerados em 208 px (tamanho do box)
+  e a config é lida só em `update()`, para não engasgar a animação. O cache fica
+  em `plugins/data/victor/profiles/gif-cache` e é invalidado quando o arquivo
+  muda. Sem `ffmpeg`, o GIF aparece parado;
 - label "Akimitsu76" com borda única
 - aplicação automática a widgets novos via serviço `frames` + systemd path unit
 
