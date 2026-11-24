@@ -9,6 +9,11 @@
 
 local CMD = "noctalia-profile"
 
+-- Aplicar/importar perfis com dezenas de plugins pode passar do timeout padrão
+-- de 5s do host de scripts (exit 143 no meio da instalação). 60s é o teto
+-- aceito; o CLI ignora plugins já habilitados nas novas tentativas.
+local CMD_TIMEOUT_MS = 60000
+
 -- CLI embarcado no plugin: acompanha o auto-update da fonte git, ao contrario
 -- de ~/.local/bin/noctalia-profile (que pode ficar antigo na outra maquina).
 local PLUGIN_DIR = (noctalia.pluginDir and noctalia.pluginDir()) or ""
@@ -92,7 +97,7 @@ local function run(args, done)
         local info = machineInfo(out)
         for _, p in ipairs(info.phases) do log("fase: " .. p) end
         if done then done(out, ok, err, info) end
-    end)
+    end, CMD_TIMEOUT_MS)
 end
 
 local function split(s)
@@ -101,11 +106,21 @@ local function split(s)
     return parts
 end
 
--- Causa concreta: nunca devolve só "comando falhou".
+-- Causa concreta: nunca devolve só "comando falhou" nem uma linha de log.
 local function reason(err, out, info)
     if info.errorLine ~= "" then return info.errorLine end
-    local line = clean(err):match("[^\r\n]+")
-        or clean(out):match("[^\r\n]+")
+    if clean(err):match("%(timeout%)$") then
+        return "tempo limite de " .. math.floor(CMD_TIMEOUT_MS / 1000)
+            .. "s; execute novamente (plugins já ativos são ignorados)"
+    end
+    -- O CLI registra progresso no stderr ([noctalia-profile] backup criado...).
+    -- Isso não é o erro: pega a última linha que não seja log informativo.
+    local last
+    for line in clean(err):gmatch("[^\r\n]+") do
+        if not line:match("^%[noctalia%-profile%]") then last = line end
+    end
+    if last and last ~= "" then return last end
+    local line = clean(out):match("[^\r\n]+")
     if line and line ~= "" then return line end
     if info.lastPhase ~= "" then return "falha em: " .. info.lastPhase end
     return "CLI " .. CMD .. " terminou sem código de erro, mas sem saída útil"

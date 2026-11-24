@@ -14,6 +14,12 @@ local PROFILES_DIR = (type(configuredDir) == "string" and configuredDir ~= "")
 local CMD = "noctalia-profile"
 local PANEL_ID = "victor/profiles:profiles"
 
+-- Aplicar um perfil pode habilitar dezenas de plugins via IPC; o padrão do
+-- Noctalia (5s) mata o CLI no meio do trabalho (exit 143) e o painel acaba
+-- mostrando uma linha de log de backup como se fosse o erro. 60s é o teto
+-- aceito pelo host de scripts; plugins já ativos são ignorados pelo CLI.
+local CMD_TIMEOUT_MS = 60000
+
 -- Usa SEMPRE o CLI que vem dentro do plugin (materializado junto com a fonte
 -- git). O ~/.local/bin/noctalia-profile pode ficar desatualizado na outra maquina.
 local PLUGIN_DIR = (noctalia.pluginDir and noctalia.pluginDir()) or ""
@@ -222,12 +228,29 @@ local function runProfile(args, onDone, initialStatus)
         end)
         if not ok then
             local code = r.exitCode or r.exit_code or r.code or r.status
-            local msg = info.errorLine ~= "" and info.errorLine
-                or trim(err):match("[^\r\n]+")
-                or trim(out):match("[^\r\n]+")
-                or (info.lastPhase ~= "" and ("falha em: " .. info.lastPhase) or nil)
-                or ("CLI " .. CMD .. " terminou com código " .. tostring(code or "desconhecido")
-                    .. (trim(out) ~= "" and (": " .. trim(out):match("[^\r\n]+")) or ""))
+            local timedOut = r.timedOut == true or r.timed_out == true
+                or trim(err):match("%(timeout%)$") ~= nil
+            local msg
+            if timedOut then
+                msg = "tempo limite de " .. math.floor(CMD_TIMEOUT_MS / 1000)
+                    .. "s ao executar " .. tostring(args[1])
+                    .. "; execute novamente (plugins já ativos são ignorados)"
+            elseif info.errorLine ~= "" then
+                msg = info.errorLine
+            else
+                -- O CLI escreve progresso no stderr ([noctalia-profile] ...).
+                -- Essas linhas não são o erro: pega a última linha útil.
+                local candidates = {}
+                for line in trim(err):gmatch("[^\r\n]+") do
+                    if not line:match("^%[noctalia%-profile%]") then
+                        table.insert(candidates, line)
+                    end
+                end
+                msg = candidates[#candidates]
+                    or trim(out):match("[^\r\n]+")
+                    or (info.lastPhase ~= "" and ("falha em: " .. info.lastPhase) or nil)
+                    or ("CLI " .. CMD .. " terminou com código " .. tostring(code or "desconhecido"))
+            end
             setStatus("Erro: " .. msg, "err")
             pcall(function()
                 if noctalia.log then
@@ -239,7 +262,7 @@ local function runProfile(args, onDone, initialStatus)
         end
         if onDone then onDone(out, ok, err, info) end
         render()
-    end)
+    end, CMD_TIMEOUT_MS)
 end
 
 local function doImport(pathArg)
