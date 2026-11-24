@@ -9,6 +9,23 @@
 
 local CMD = "noctalia-profile"
 
+-- CLI embarcado no plugin: acompanha o auto-update da fonte git, ao contrario
+-- de ~/.local/bin/noctalia-profile (que pode ficar antigo na outra maquina).
+local PLUGIN_DIR = (noctalia.pluginDir and noctalia.pluginDir()) or ""
+local BUNDLED_CLI = PLUGIN_DIR ~= "" and (PLUGIN_DIR .. "/bin/noctalia-profile") or ""
+
+local function cliArgv(args)
+    local out = {}
+    if BUNDLED_CLI ~= "" and noctalia.fileExists(BUNDLED_CLI) then
+        table.insert(out, "python3")
+        table.insert(out, BUNDLED_CLI)
+    else
+        table.insert(out, CMD)
+    end
+    for _, a in ipairs(args) do table.insert(out, a) end
+    return out
+end
+
 local function notify(t, b)
     if noctalia.notify then noctalia.notify(t, b or "") end
 end
@@ -17,17 +34,28 @@ local function log(m)
     if noctalia.log then noctalia.log("[profiles] " .. tostring(m)) end
 end
 
+local function resultInfo(r)
+    if type(r) ~= "table" then return true, tostring(r or ""), "" end
+    local out = r.stdout or r.output or r.out or ""
+    local err = r.stderr or r.error or r.message or ""
+    if type(out) ~= "string" then out = tostring(out) end
+    if type(err) ~= "string" then err = tostring(err) end
+    local code = r.exitCode or r.exit_code or r.code or r.status
+    local ok
+    if code ~= nil then ok = (tonumber(code) == 0)
+    elseif r.success ~= nil then ok = (r.success == true)
+    elseif r.ok ~= nil then ok = (r.ok == true)
+    else ok = true end
+    if r.timedOut == true or r.timed_out == true then
+        ok = false
+        err = err ~= "" and (err .. " (timeout)") or "comando excedeu o tempo limite"
+    end
+    return ok, out, err
+end
+
 local function run(args, done)
-    noctalia.runAsync({CMD, table.unpack(args)}, function(r)
-        local out, err = "", ""
-        if type(r) == "table" then
-            out = r.stdout or ""
-            err = r.stderr or ""
-        elseif type(r) == "string" then
-            out = r
-        end
-        local ok = (type(r) ~= "table")
-            or (tonumber(r.exitCode) == 0 and not r.timedOut)
+    noctalia.runAsync(cliArgv(args), function(r)
+        local ok, out, err = resultInfo(r)
         if done then done(out, ok, err) end
     end)
 end
@@ -80,9 +108,12 @@ local function handle(action, name, extra)
         local args = {"import", name}
         if extra and extra ~= "" then table.insert(args, extra) end
         run(args, function(out, ok, err)
-            if not ok then notify("Erro ao importar", clean(err)); return end
-            local pname = clean(out):match("PROFILE=([^\r\n]+)") or "perfil"
-            notify(out:match("APPLIED=1") and "Perfil importado e aplicado" or "Perfil importado", pname)
+            local pname = clean(out):match("PROFILE=([^\r\n]+)")
+            if not ok and not pname then
+                notify("Erro ao importar", clean(err) ~= "" and clean(err) or "falha ao executar " .. CMD)
+                return
+            end
+            notify(out:match("APPLIED=1") and "Perfil importado e aplicado" or "Perfil importado", pname or "perfil")
         end)
     else
         notify("Profiles", "acao desconhecida: " .. tostring(action) ..

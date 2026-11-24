@@ -45,7 +45,8 @@ O import **aplica o perfil automaticamente** e imprime `PROFILE=<nome>` /
 O pacote `.tar.gz` inclui `manifest.json`, `config/`, `settings.toml`,
 `plugins-data/` e `wallpapers/`. Também dá pelo painel: ícone de download em
 cada perfil, botão **PROCURAR ARQUIVO** (seletor zenity) e importação com
-atualização da lista + aplicação automática.
+atualização da lista + aplicação automática. O CLI usado pelo painel vem
+embarcado no plugin, então acompanha o auto-update sem instalação manual.
 
 ## ✦ Atualizar
 

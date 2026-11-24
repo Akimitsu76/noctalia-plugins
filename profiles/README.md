@@ -49,6 +49,11 @@ Se o `zenity` não estiver instalado, o campo de caminho continua funcionando.
 Falhas do comando (arquivo inexistente, nome duplicado) agora aparecem em
 vermelho no painel — não são mais anunciadas como "importado".
 
+O painel e o service usam o CLI **embarcado no plugin**
+(`profiles/bin/noctalia-profile`), que acompanha o auto-update da fonte git.
+Não é preciso instalar/atualizar `~/.local/bin/noctalia-profile` para o painel
+funcionar — essa cópia serve apenas para uso manual no terminal.
+
 ### Exportar / importar pela linha de comando
 
 ```sh

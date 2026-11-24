@@ -14,6 +14,23 @@ local PROFILES_DIR = (type(configuredDir) == "string" and configuredDir ~= "")
 local CMD = "noctalia-profile"
 local PANEL_ID = "victor/profiles:profiles"
 
+-- Usa SEMPRE o CLI que vem dentro do plugin (materializado junto com a fonte
+-- git). O ~/.local/bin/noctalia-profile pode ficar desatualizado na outra maquina.
+local PLUGIN_DIR = (noctalia.pluginDir and noctalia.pluginDir()) or ""
+local BUNDLED_CLI = PLUGIN_DIR ~= "" and (PLUGIN_DIR .. "/bin/noctalia-profile") or ""
+
+local function cliArgv(args)
+    local out = {}
+    if BUNDLED_CLI ~= "" and noctalia.fileExists(BUNDLED_CLI) then
+        table.insert(out, "python3")
+        table.insert(out, BUNDLED_CLI)
+    else
+        table.insert(out, CMD)
+    end
+    for _, a in ipairs(args) do table.insert(out, a) end
+    return out
+end
+
 -- O seletor de arquivos roda fora do painel (o zenity rouba o foco e o painel
 -- fecha). O caminho escolhido fica num "stash" e é consumido em onOpen.
 local PICK_DIR = (noctalia.pluginDataDir and noctalia.pluginDataDir())
@@ -80,30 +97,61 @@ local function refreshProfiles()
     end)
 end
 
+-- O formato do resultado do runAsync muda entre versoes do Noctalia: umas
+-- usam exitCode, outras exit_code/status/success. Aceita todos; nunca mais
+-- "comando falhou" sem motivo real.
+local function resultInfo(r)
+    if type(r) ~= "table" then return true, tostring(r or ""), "" end
+    local out = r.stdout or r.output or r.out or ""
+    local err = r.stderr or r.error or r.message or ""
+    if type(out) ~= "string" then out = tostring(out) end
+    if type(err) ~= "string" then err = tostring(err) end
+    local code = r.exitCode or r.exit_code or r.code or r.status
+    local ok
+    if code ~= nil then ok = (tonumber(code) == 0)
+    elseif r.success ~= nil then ok = (r.success == true)
+    elseif r.ok ~= nil then ok = (r.ok == true)
+    else ok = true end
+    if r.timedOut == true or r.timed_out == true then
+        ok = false
+        err = err ~= "" and (err .. " (timeout)") or "comando excedeu o tempo limite"
+    end
+    return ok, out, err
+end
+
+local function manifestField(name, field)
+    if not name or name == "" then return nil end
+    local mf = PROFILES_DIR .. "/" .. name .. "/manifest.json"
+    if not noctalia.fileExists(mf) then return nil end
+    local ok, raw = pcall(noctalia.readFile, mf)
+    if not ok or not raw then return nil end
+    local ok2, decoded = pcall(noctalia.json.decode, raw)
+    if not ok2 or type(decoded) ~= "table" then return nil end
+    return decoded[field]
+end
+
 local function runProfile(args, onDone)
     busy = true
     setStatus("Executando…", "info")
     render()
-    noctalia.runAsync({ CMD, table.unpack(args) }, function(r)
+    noctalia.runAsync(cliArgv(args), function(r)
         busy = false
-        local out, err = "", ""
-        if type(r) == "table" then
-            out = r.stdout or ""
-            err = r.stderr or ""
-        elseif type(r) == "string" then
-            out = r
-        end
-        -- Sem checar exitCode, uma falha do CLI aparecia como sucesso.
-        local ok = (type(r) ~= "table")
-            or (tonumber(r.exitCode) == 0 and not r.timedOut)
+        local ok, out, err = resultInfo(r)
         refreshProfiles()
-        if onDone then onDone(out, ok) end
         if not ok then
             local msg = trim(err):match("[^\r\n]+")
                 or trim(out):match("[^\r\n]+")
-                or "comando falhou"
+                or ("falha ao executar " .. CMD)
             setStatus("Erro: " .. msg, "err")
+            pcall(function()
+                if noctalia.log then
+                    noctalia.log("[profiles] falha: " .. tostring(args[1])
+                        .. " exit=" .. tostring(r.exitCode or r.exit_code or r.status)
+                        .. " stdout=" .. trim(out) .. " stderr=" .. trim(err))
+                end
+            end)
         end
+        if onDone then onDone(out, ok, err) end
         render()
     end)
 end
@@ -118,13 +166,32 @@ local function doImport(pathArg)
     end
     path = noctalia.expandPath(path)
     importPath = path
+
+    local guess = path:match("([^/]+)%.tar%.gz$") or "perfil"
+    local before = manifestField(guess, "imported_at")
+
     runProfile({ "import", path }, function(out, ok)
-        if not ok then return end
         -- O CLI imprime o nome real do perfil (pode vir do manifesto, nao do arquivo).
         local name = trim(out:match("PROFILE=([^\r\n]+)") or "")
-        if name == "" then name = path:match("([^/]+)%.tar%.gz$") or "perfil" end
+        if name == "" then name = guess end
+
+        -- Verificacao final: so considera sucesso se o manifesto mudou. Isso
+        -- evita "importado" quando o CLI falhou ou o perfil ja existia.
+        local after = manifestField(name, "imported_at")
+        if not after or after == before then return end
+
         selected = name
-        setStatus((out:match("APPLIED=1") and "Importado e aplicado: " or "Importado: ") .. name, "ok")
+        refreshProfiles()
+        if out:match("APPLIED=1") then
+            setStatus("Importado e aplicado: " .. name, "ok")
+        else
+            -- CLI antigo (ou aplicacao pulada): garante a aplicacao aqui.
+            setStatus("Importado: " .. name .. ". Aplicando…", "info")
+            render()
+            runProfile({ "apply", name }, function(_, ok2)
+                if ok2 then setStatus("Importado e aplicado: " .. name, "ok") end
+            end)
+        end
     end)
 end
 
