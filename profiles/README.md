@@ -70,7 +70,8 @@ noctalia-profile import ~/Downloads/meu-tema.tar.gz --no-apply
 
 O pacote contém `manifest.json`, `config/`, `settings.toml`, `plugins-data/` e
 `wallpapers/`. Caminhos de extração são validados e o arquivo é gerado de forma
-atômica — nenhum caminho absoluto do seu usuário é embutido.
+atômica — nenhum caminho absoluto do seu usuário é embutido. Packages feitos
+com `tar czf perfil.tar.gz -C pasta .` também são aceitos (o `./` é normalizado).
 
 ### IPC do service
 

@@ -228,18 +228,25 @@ def cmd_import(args):
         raise SystemExit(f"arquivo invalido (nao e .tar.gz): {e}")
 
     with tf:
-        members = tf.getmembers()
-        names = [m.name for m in members]
-        if "manifest.json" not in names and "settings.toml" not in names:
-            raise SystemExit("pacote nao parece conter um perfil do Noctalia")
-        for m in members:
-            p = Path(m.name)
+        # Pacotes feitos com `tar czf x.tar.gz -C pasta .` chegam com "./" no
+        # nome: normaliza antes de validar e extrair.
+        safe = []
+        for m in tf.getmembers():
+            parts = [x for x in Path(m.name).parts if x not in (".", "")]
+            if not parts:
+                continue
+            p = Path(*parts)
             if p.is_absolute() or ".." in p.parts:
                 raise SystemExit(f"pacote com caminho inseguro: {m.name}")
+            m.name = str(p)
+            safe.append(m)
+        names = [m.name for m in safe]
+        if "manifest.json" not in names and "settings.toml" not in names:
+            raise SystemExit("pacote nao parece conter um perfil do Noctalia")
 
         with tempfile.TemporaryDirectory(prefix="noctalia-import-") as td:
             tmp = Path(td)
-            tf.extractall(tmp)
+            tf.extractall(tmp, members=safe)
             mf = tmp / "manifest.json"
             manifest = {}
             if mf.exists():
