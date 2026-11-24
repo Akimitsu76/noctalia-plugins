@@ -94,8 +94,10 @@ function onIpc(event, payload)
         name = parts[2]
         extra = parts[3]
         if type(payload) == "string" and payload ~= "" then
-            if not name then name = payload
-            elseif not extra then extra = payload end
+            -- o IPC separa o evento do resto: "export" + "nome /caminho.tar.gz"
+            local rest = split(payload)
+            if not name then name = rest[1] end
+            if not extra then extra = rest[2] end
         end
     end
     handle(action, name, extra)
