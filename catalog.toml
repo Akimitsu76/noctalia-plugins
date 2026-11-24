@@ -1,13 +1,13 @@
 [[plugin]]
 id = "victor/profiles"
 name = "Profiles"
-version = "1.4.3"
-updated_at = 1795489782
+version = "1.5.0"
+updated_at = 1795491494
 added_at = 1795450000
 author = "victor"
 license = "MIT"
 icon = "save"
-description = "Snapshot completo do desktop Noctalia: config, widgets, layout, molduras, fontes, cores, wallpaper, plugins e assets. Exporta/importa em .tar.gz e reinstala automaticamente fontes e plugins na maquina de destino, sem install.sh."
+description = "Snapshot completo do desktop Noctalia: config, widgets, layout, molduras, fontes, cores, wallpaper, plugins e assets. Exporta/importa em .tar.gz, remapeia outputs entre monitores e reinstala fontes e plugins na maquina de destino, sem install.sh."
 plugin_api = 46
 tags = ["system", "backup", "desktop", "personalization"]
 dependencies = []

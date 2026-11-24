@@ -44,20 +44,30 @@ assets referenciados e a revisão de cada fonte git.
 
 No import em outra máquina, o CLI adiciona as fontes que faltam, habilita os
 plugins, copia plugins `path` para `~/.local/share/noctalia/user-plugins/`,
-reescreve os caminhos e **só depois** restaura a configuração. Tudo com backup,
-`--dry-run` e rollback.
+detecta os monitores atuais e **remapeia outputs** (`DP-3` → `eDP-1`, por
+exemplo, ajustando resolução, posição dos widgets e wallpaper por monitor), e
+**só depois** restaura a configuração. Tudo com backup, `--dry-run` e rollback.
+
+Assim, um perfil salvo com 14 widgets num monitor externo aparece inteiro,
+na mesma ordem e layout, em outra máquina que tenha apenas a tela interna.
 
 ```bash
 noctalia-profile export desktop-principal                    # -> ~/Documents/noctalia-profiles/
 noctalia-profile export desktop-principal ~/Downloads/meu.tar.gz
 noctalia-profile import ~/Downloads/meu.tar.gz --yes        # instala + aplica
+noctalia-profile import ~/Downloads/meu.tar.gz --force --yes # sobrescreve perfil existente
 noctalia-profile import ~/Downloads/meu.tar.gz --no-apply   # só instala
 noctalia-profile apply desktop-principal --dry-run          # simula
 ```
 
+Flags: `--yes` confirma fontes git novas sem prompt, `--dry-run` não altera
+nada, `--force` substitui um perfil já existente no import e `--no-apply`
+apenas instala o perfil na lista sem restaurar.
+
 Saída para painel/service: `PROFILE=`, `PHASE=`, `APPLIED=1`,
-`INSTALLED_PLUGINS=`, `MISSING_PLUGINS=` e `ERROR=<causa>`. Nunca aparece
-"comando falhou" sem motivo concreto.
+`WIDGETS_RESTORED=`, `OUTPUT_REMAP=`, `PLUGINS_INSTALLED=`,
+`INSTALLED_PLUGINS=` (compat), `MISSING_PLUGINS=` e `ERROR=<causa>`. Nunca
+aparece "comando falhou" sem motivo concreto.
 
 O pacote `.tar.gz` não contém caminhos absolutos do usuário e é validado contra
 `..`, symlinks escapando e tamanho excessivo. Manifestos v1 continuam legíveis.

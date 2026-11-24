@@ -3,8 +3,9 @@
 Plugin de **perfis completos** para o [Noctalia](https://noctalia.dev). Salva e
 reaplica **toda** a personalização do desktop e exporta isso como um `.tar.gz`
 portátil. Ao importar em outro computador, o plugin **adiciona as fontes e
-habilita os plugins que faltam** antes de restaurar a configuração — sem
-`install.sh`, sem cópias manuais e sem depender de nada em `~/.local/bin`.
+habilita os plugins que faltam**, **remapeia os monitores** (de `DP-3` para
+`eDP-1`, por exemplo) e só então restaura a configuração — sem `install.sh`,
+sem edição manual e sem depender de nada em `~/.local/bin`.
 
 ![Painel de perfis](screenshots/panel.webp)
 
@@ -20,7 +21,10 @@ habilita os plugins que faltam** antes de restaurar a configuração — sem
 | Molduras geradas | `frames/` |
 | Wallpapers, avatares, stickers, capas, fontes e qualquer asset referenciado por caminho absoluto | `assets/` + mapa no manifesto |
 | Revisão (commit) de cada fonte git | `plugins.sources[].revision` |
-| Host, data, versão do Noctalia, widgets e checksums | `manifest.json` |
+| Outputs ativos no save (connector, descrição, fabricante, modelo, serial, resolução e primário) | `outputs[]` no manifesto (via `niri msg outputs`, `wlr-randr --json` ou `hyprctl monitors -j`) |
+| Ordem e tipos dos widgets de área de trabalho | `desktop_widgets.widget_order`, `.widget_count`, `.widget_types[]` |
+| Remapeamento aplicado no destino | `output_remap` no manifesto |
+| Host, data, versão do Noctalia e checksums | `manifest.json` |
 
 Nenhum caminho absoluto do seu usuário entra no pacote: caminhos dentro do
 `HOME` são gravados como `~/...` e reexpandidos na máquina de destino.
@@ -37,23 +41,40 @@ Antes de sobrescrever qualquer coisa, o CLI `noctalia-profile`:
 4. copia plugins `path` embarcados para
    `~/.local/share/noctalia/user-plugins/<fonte>` e reescreve o `location` no
    `settings.toml`;
-5. só então restaura `config/`, `plugins-data/`, `frames/`, assets e
-   `settings.toml` (com backup timestampado e rollback em caso de falha);
-6. roda `noctalia msg config-reload` e o gerador de molduras embarcado;
-7. confere plugins habilitados, `desktop_widgets.widget_order` e existência dos
-   assets, reportando diferenças em linhas `DIFF=`.
+5. detecta os outputs atuais, monta o `output_map` (o primário salvo vai para o
+   primário atual; os demais são distribuídos na ordem; com um só monitor, todos
+   são espelhados nele) e **reescreve uma cópia do `settings.toml`** antes de
+   aplicar: `output` dos widgets, ids `@conector` do lockscreen, seções
+   `[wallpaper.monitors.<nome>]`, `placement_width/height` e `cx/cy`
+   escalados para a resolução atual;
+6. restaura `config/`, `plugins-data/`, `frames/`, `local-plugins/`, assets e o
+   `settings.toml` remapeado (backup timestampado e rollback em caso de falha);
+7. roda `noctalia msg config-reload`, `noctalia msg desktop-widgets-show` e o
+   gerador de molduras embarcado;
+8. confere plugins habilitados, `widget_order`, outputs inválidos e existência
+   dos assets, reportando diferenças em linhas `DIFF=`.
+
+Nenhum widget fica apontando para um conector que não existe na máquina de
+destino. O mapa usado fica registrado em `manifest.output_remap` para auditoria.
 
 Saída machine-readable (usada pelo painel e pelo service):
 
 ```
 PROFILE=desktop-principal
 PHASE=instalando plugins 3/30: victor/profiles
-PHASE=restaurando config
+PHASE=remapeando monitors
+PHASE=restaurando widgets
 PHASE=recarregando shell
+OUTPUT_REMAP=DP-3->eDP-1
+WIDGETS_RESTORED=14
 APPLIED=1
+PLUGINS_INSTALLED=source:akimitsu,victor/profiles,foo/bar
 INSTALLED_PLUGINS=source:akimitsu,victor/profiles,foo/bar
 MISSING_PLUGINS=
 ```
+
+`INSTALLED_PLUGINS=` continua sendo emitido para compatibilidade com painéis
+antigos; `PLUGINS_INSTALLED=` é o nome novo.
 
 ## Molduras góticas nativas
 
@@ -82,9 +103,11 @@ noctalia msg panel-toggle victor/profiles:profiles
 | **PROCURAR ARQUIVO** | abre o seletor de arquivos (zenity) para escolher o `.tar.gz` |
 | **IMPORTAR** | instala fontes/plugins, atualiza a lista e **aplica automaticamente** |
 
-O painel mostra a fase atual e, no final, quantos plugins foram instalados e
-quais faltaram. Erros trazem a causa concreta (fonte não adicionada, plugin que
-não apareceu após `enable`, asset ausente etc.) — nunca apenas "comando falhou".
+O painel mostra a fase atual e, no final, quantos widgets foram restaurados,
+quantos plugins foram instalados, qual remapeamento de monitor ocorreu e o que
+faltou. Erros trazem a causa concreta (fonte não adicionada, plugin que não
+apareceu após `enable`, output inexistente, asset ausente etc.) — nunca apenas
+"comando falhou".
 Se o `zenity` não estiver instalado, o campo de caminho continua funcionando.
 
 Tanto o painel quanto o service chamam os CLI que vêm dentro do plugin via
@@ -156,7 +179,12 @@ python3 -m unittest discover -s tests -v
 
 Os testes simulam uma máquina B com `HOME`/XDG isolados e um falso `noctalia`,
 verificando snapshot v2, reinstalação de fontes/plugins, assets, widget order,
-tar malicioso e compatibilidade com manifest v1.
+tar malicioso e compatibilidade com manifest v1. Há ainda um teste que salva os
+widgets em `DP-3` e aplica numa máquina com apenas `eDP-1`: confere que nenhum
+widget/seção de wallpaper continua em `DP-3`, que `placement_*` e `cx/cy` foram
+escalados, que a ordem dos widgets foi preservada e que `OUTPUT_REMAP` foi
+emitido. Variável `NOCTALIA_PROFILE_OUTPUTS` (JSON) força os outputs detectados
+para testes.
 
 ## Licença
 

@@ -53,19 +53,28 @@ local function resultInfo(r)
     return ok, out, err
 end
 
+local function clean(out)
+    return (tostring(out or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
 -- Linhas machine-readable impressas pelo CLI v2.
 local function machineInfo(out)
+    local text = tostring(out or "")
     local phases = {}
-    for line in tostring(out or ""):gmatch("[^\r\n]+") do
+    for line in text:gmatch("[^\r\n]+") do
         local p = line:match("^PHASE=(.+)$")
         if p then table.insert(phases, p) end
     end
     return {
         phases = phases,
-        installed = (out:match("INSTALLED_PLUGINS=([^\r\n]*)") or ""):gsub("^%s+", ""):gsub("%s+$", ""),
-        missing = (out:match("MISSING_PLUGINS=([^\r\n]*)") or ""):gsub("^%s+", ""):gsub("%s+$", ""),
-        errorLine = (out:match("ERROR=([^\r\n]+)") or ""):gsub("^%s+", ""):gsub("%s+$", ""),
-        applied = out:match("APPLIED=1") ~= nil,
+        lastPhase = #phases > 0 and phases[#phases] or "",
+        installed = clean(text:match("PLUGINS_INSTALLED=([^\r\n]*)")
+            or text:match("INSTALLED_PLUGINS=([^\r\n]*)") or ""),
+        missing = clean(text:match("MISSING_PLUGINS=([^\r\n]*)") or ""),
+        widgets = tonumber(clean(text:match("WIDGETS_RESTORED=(%d+)") or "")) or 0,
+        remap = clean(text:match("OUTPUT_REMAP=([^\r\n]*)") or ""),
+        errorLine = clean(text:match("ERROR=([^\r\n]+)") or ""),
+        applied = text:match("APPLIED=1") ~= nil,
     }
 end
 
@@ -92,23 +101,24 @@ local function split(s)
     return parts
 end
 
-local function clean(out)
-    return (tostring(out or ""):gsub("^%s+", ""):gsub("%s+$", ""))
-end
-
 -- Causa concreta: nunca devolve só "comando falhou".
 local function reason(err, out, info)
     if info.errorLine ~= "" then return info.errorLine end
     local line = clean(err):match("[^\r\n]+")
         or clean(out):match("[^\r\n]+")
     if line and line ~= "" then return line end
-    return "falha ao executar " .. CMD
+    if info.lastPhase ~= "" then return "falha em: " .. info.lastPhase end
+    return "CLI " .. CMD .. " terminou sem código de erro, mas sem saída útil"
 end
 
 local function summary(info)
     local parts = {}
+    if info.widgets > 0 then
+        table.insert(parts, info.widgets .. " widget(s) restaurado(s)")
+    end
     local n = countList(info.installed)
     if n > 0 then table.insert(parts, n .. " plugin(s)/fonte(s) instalado(s)") end
+    if info.remap ~= "" then table.insert(parts, "monitores: " .. info.remap) end
     if info.missing ~= "" then table.insert(parts, "faltaram: " .. info.missing) end
     return table.concat(parts, " · ")
 end

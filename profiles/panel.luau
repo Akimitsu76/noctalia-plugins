@@ -82,11 +82,18 @@ local function metaLine(p)
     local when = p.saved_at or "?"
     when = when:gsub("T", " "):sub(1, 16)
     local host = p.hostname or "?"
-    local nwall = 0
-    if type(p.wallpapers) == "table" then
-        for _ in pairs(p.wallpapers) do nwall = nwall + 1 end
+    local nwidgets = 0
+    if type(p.desktop_widgets) == "table" then
+        nwidgets = tonumber(p.desktop_widgets.widget_count) or 0
     end
-    return when .. "  ·  " .. host .. "  ·  " .. nwall .. " wallpaper(s)"
+    local nassets = 0
+    local src = type(p.assets) == "table" and p.assets or p.wallpapers
+    if type(src) == "table" then
+        for _ in pairs(src) do nassets = nassets + 1 end
+    end
+    local detail = nwidgets > 0 and (nwidgets .. " widget(s)")
+        or (nassets .. " asset(s)")
+    return when .. "  ·  " .. host .. "  ·  " .. detail
 end
 
 local function refreshProfiles()
@@ -157,8 +164,12 @@ local function machineInfo(out)
     end
     return {
         phases = phases,
-        installed = trim(out:match("INSTALLED_PLUGINS=([^\r\n]*)") or ""),
+        lastPhase = #phases > 0 and phases[#phases] or "",
+        installed = trim((out:match("PLUGINS_INSTALLED=([^\r\n]*)")
+            or out:match("INSTALLED_PLUGINS=([^\r\n]*)") or "")),
         missing = trim(out:match("MISSING_PLUGINS=([^\r\n]*)") or ""),
+        widgets = tonumber(trim(out:match("WIDGETS_RESTORED=(%d+)") or "")) or 0,
+        remap = trim(out:match("OUTPUT_REMAP=([^\r\n]*)") or ""),
         errorLine = trim(out:match("ERROR=([^\r\n]+)") or ""),
         applied = out:match("APPLIED=1") ~= nil,
     }
@@ -168,6 +179,29 @@ local function countList(s)
     local n = 0
     if s ~= "" then for _ in s:gmatch("[^,]+") do n = n + 1 end end
     return n
+end
+
+-- Resumo único usado por import/apply: widgets, plugins e remapeamento.
+local function describeResult(info)
+    local parts = {}
+    if info.widgets > 0 then
+        table.insert(parts, tr("widgets_restored", { count = info.widgets },
+            info.widgets .. " widget(s) restaurado(s)"))
+    end
+    local n = countList(info.installed)
+    if n > 0 then
+        table.insert(parts, tr("plugins_installed", { count = n },
+            n .. " plugin(s) instalado(s)"))
+    end
+    if info.remap ~= "" then
+        table.insert(parts, tr("output_remap", { map = info.remap },
+            "monitores: " .. info.remap))
+    end
+    if info.missing ~= "" then
+        table.insert(parts, tr("missing", { list = info.missing },
+            "faltaram: " .. info.missing))
+    end
+    return #parts > 0 and (" · " .. table.concat(parts, " · ")) or ""
 end
 
 local function runProfile(args, onDone, initialStatus)
@@ -187,10 +221,13 @@ local function runProfile(args, onDone, initialStatus)
             end
         end)
         if not ok then
+            local code = r.exitCode or r.exit_code or r.code or r.status
             local msg = info.errorLine ~= "" and info.errorLine
                 or trim(err):match("[^\r\n]+")
                 or trim(out):match("[^\r\n]+")
-                or ("falha ao executar " .. CMD)
+                or (info.lastPhase ~= "" and ("falha em: " .. info.lastPhase) or nil)
+                or ("CLI " .. CMD .. " terminou com código " .. tostring(code or "desconhecido")
+                    .. (trim(out) ~= "" and (": " .. trim(out):match("[^\r\n]+")) or ""))
             setStatus("Erro: " .. msg, "err")
             pcall(function()
                 if noctalia.log then
@@ -231,16 +268,7 @@ local function doImport(pathArg)
 
         selected = name
         refreshProfiles()
-        local extra = ""
-        local nInst = countList(info.installed)
-        if nInst > 0 then
-            extra = extra .. tr("plugins_installed", { count = nInst },
-                " · " .. nInst .. " plugin(s) instalado(s)")
-        end
-        if info.missing ~= "" then
-            extra = extra .. tr("missing", { list = info.missing },
-                " · faltaram: " .. info.missing)
-        end
+        local extra = describeResult(info)
 
         if info.applied then
             setStatus(tr("imported_applied", { name = name, extra = extra },
@@ -252,17 +280,12 @@ local function doImport(pathArg)
             render()
             runProfile({ "apply", name, "--yes" }, function(_, ok2, _, info2)
                 if ok2 then
-                    local more = ""
-                    if countList(info2.installed) > 0 then
-                        more = tr("plugins_installed", { count = countList(info2.installed) },
-                            " · " .. countList(info2.installed) .. " plugin(s) instalado(s)")
-                    end
-                    setStatus(tr("imported_applied", { name = name, extra = extra .. more },
-                        "Importado e aplicado: " .. name .. extra .. more), "ok")
+                    setStatus(tr("imported_applied", { name = name, extra = extra .. describeResult(info2) },
+                        "Importado e aplicado: " .. name .. extra .. describeResult(info2)), "ok")
                 end
-            end, tr("phase_apply", nil, "Instalando plugins e aplicando perfil…"))
+            end, tr("phase_apply", nil, "Instalando plugins, remapeando monitores e restaurando widgets…"))
         end
-    end, tr("phase_import", nil, "Instalando plugins e restaurando config…"))
+    end, tr("phase_import", nil, "Instalando plugins, remapeando monitores e restaurando widgets…"))
 end
 
 local function pickFile()
@@ -453,14 +476,10 @@ function render()
                 local target = selected
                 runProfile({ "apply", target, "--yes" }, function(out, ok, _, info)
                     if not ok then return end
-                    local extra = ""
-                    if info.installed ~= "" then
-                        extra = tr("plugins_installed", { count = countList(info.installed) },
-                            " · " .. countList(info.installed) .. " plugin(s) instalado(s)")
-                    end
+                    local extra = describeResult(info)
                     setStatus(tr("applied", { name = target, extra = extra },
                         "Perfil '" .. target .. "' aplicado." .. extra), "ok")
-                end, tr("phase_apply", nil, "Instalando plugins e aplicando perfil…"))
+                end, tr("phase_apply", nil, "Instalando plugins, remapeando monitores e restaurando widgets…"))
             end,
         }),
     })

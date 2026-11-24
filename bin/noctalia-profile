@@ -131,6 +131,311 @@ def load_settings(path=SETTINGS):
         return tomllib.load(f)
 
 
+# ── detecção e remapeamento de monitores ─────────────────────────────────────
+def _normalize_output(o):
+    return {
+        "connector": str(o.get("connector") or o.get("name") or o.get("output") or ""),
+        "description": str(o.get("description") or ""),
+        "make": str(o.get("make") or ""),
+        "model": str(o.get("model") or ""),
+        "serial": str(o.get("serial") or ""),
+        "width": int(o.get("width") or 0),
+        "height": int(o.get("height") or 0),
+        "primary": bool(o.get("primary", False)),
+    }
+
+
+def _parse_niri_outputs(text):
+    out, cur = [], None
+    for raw in text.splitlines():
+        line = raw.strip()
+        m = re.match(r'^Output\s+"([^"]+)"\s+\(([^)]+)\)', line)
+        if m:
+            desc, connector = m.group(1), m.group(2)
+            parts = desc.split()
+            make = parts[0] if parts else ""
+            model = " ".join(parts[1:-1]) if len(parts) > 2 else (parts[1] if len(parts) > 1 else "")
+            serial = parts[-1] if len(parts) > 2 and re.fullmatch(r"[A-Za-z0-9_-]{5,}", parts[-1]) else ""
+            cur = {"connector": connector, "description": desc, "make": make,
+                   "model": model, "serial": serial, "width": 0, "height": 0,
+                   "primary": False}
+            out.append(cur)
+            continue
+        if cur is None:
+            continue
+        m = re.match(r"^(?:Logical size|Current mode):\s*(\d+)x(\d+)", line)
+        if m:
+            cur["width"], cur["height"] = int(m.group(1)), int(m.group(2))
+        m = re.match(r"^Logical position:\s*(-?\d+),\s*(-?\d+)", line)
+        if m and int(m.group(1)) == 0 and int(m.group(2)) == 0:
+            cur["primary"] = True
+        if re.search(r"\bprimary\b", line, re.I):
+            cur["primary"] = True
+    if out and not any(o["primary"] for o in out):
+        out[0]["primary"] = True
+    return [_normalize_output(o) for o in out]
+
+
+def _parse_wlr_outputs(text):
+    data = json.loads(text)
+    items = data.get("outputs", []) if isinstance(data, dict) else data
+    out = []
+    for o in items:
+        mode = o.get("current_mode") or {}
+        if not mode:
+            mode = next((m for m in o.get("modes", []) if m.get("current")), {})
+        out.append(_normalize_output({
+            "name": o.get("name"), "description": o.get("description"),
+            "make": o.get("make"), "model": o.get("model"), "serial": o.get("serial"),
+            "width": mode.get("width") or o.get("width"),
+            "height": mode.get("height") or o.get("height"),
+            "primary": o.get("primary", False),
+        }))
+    return out
+
+
+def _parse_hypr_outputs(text):
+    data = json.loads(text)
+    items = data if isinstance(data, list) else data.get("outputs", [])
+    return [_normalize_output({
+        "name": o.get("name"), "description": o.get("description"),
+        "make": o.get("make"), "model": o.get("model"), "serial": o.get("serial"),
+        "width": o.get("width"), "height": o.get("height"),
+        "primary": o.get("primary", False) or o.get("id") == 0,
+    }) for o in items]
+
+
+def detect_outputs():
+    """Outputs ativos. Override via NOCTALIA_PROFILE_OUTPUTS (JSON) para testes."""
+    override = os.environ.get("NOCTALIA_PROFILE_OUTPUTS")
+    if override:
+        try:
+            data = json.loads(override)
+            items = data.get("outputs", []) if isinstance(data, dict) else data
+            return [_normalize_output(o) for o in items]
+        except Exception as e:
+            log(f"aviso: NOCTALIA_PROFILE_OUTPUTS inválido: {e}")
+    for argv, parser in (
+        (["niri", "msg", "outputs"], _parse_niri_outputs),
+        (["wlr-randr", "--json"], _parse_wlr_outputs),
+        (["hyprctl", "monitors", "-j"], _parse_hypr_outputs),
+    ):
+        ok, out, _err = run_cmd(argv, timeout=10)
+        if not ok or not out:
+            continue
+        try:
+            parsed = parser(out)
+        except Exception as e:
+            log(f"aviso: falha ao interpretar {' '.join(argv)}: {e}")
+            continue
+        if parsed:
+            return parsed
+    return []
+
+
+def build_output_map(saved_outputs, current_outputs):
+    """Nunca deixa widget apontando para conector que não existe aqui."""
+    if not current_outputs:
+        return {}
+    names = [o["connector"] for o in current_outputs]
+    primary = next((o for o in current_outputs if o["primary"]), current_outputs[0])
+    saved = [_normalize_output(o) for o in (saved_outputs or []) if o.get("connector")]
+    mapping, used = {}, set()
+    for o in saved:
+        if o["connector"] in names:
+            mapping[o["connector"]] = o["connector"]
+            used.add(o["connector"])
+    remaining = [o for o in current_outputs
+                 if o["connector"] not in used and o["connector"] != primary["connector"]]
+    saved_primary = next((o for o in saved if o["primary"]), saved[0] if saved else None)
+    for o in saved:
+        name = o["connector"]
+        if name in mapping:
+            continue
+        if saved_primary and name == saved_primary["connector"]:
+            mapping[name] = primary["connector"]
+        elif remaining:
+            mapping[name] = remaining.pop(0)["connector"]
+        else:
+            mapping[name] = primary["connector"]
+    return mapping
+
+
+def _toml_blocks(text):
+    """Divide settings.toml em (cabeçalho, linhas), preservando o texto original."""
+    blocks = [(None, [])]
+    for line in text.splitlines(keepends=True):
+        m = re.match(r"^\s*\[([^\]]+)\]", line)
+        if m:
+            blocks.append((m.group(1).strip(), [line]))
+        else:
+            blocks[-1][1].append(line)
+    return blocks
+
+
+def _key_value(lines, key):
+    for line in lines:
+        m = re.match(r"^\s*" + re.escape(key) + r"\s*=\s*(.+?)\s*(?:#.*)?$", line)
+        if m:
+            return m.group(1).strip().strip('"').strip("'")
+    return None
+
+
+def _set_key(line, key, value, quote=False):
+    pattern = r"(\b" + re.escape(key) + r"\s*=\s*)" + (r'"[^"]*"' if quote else r"-?[\d.]+")
+    return re.sub(pattern, lambda m: m.group(1) + (f'"{value}"' if quote else str(value)), line)
+
+
+def _lock_ident(header):
+    m = re.search(r'"([^"]*)"', header or "")
+    return m.group(1) if m else None
+
+
+def outputs_from_settings_text(text):
+    """Fallback para manifests antigos: descobre outputs pelos widgets."""
+    seen, out = set(), []
+    for header, lines in _toml_blocks(text):
+        if not header or ".widget." not in header:
+            continue
+        output = _key_value(lines, "output")
+        if output and output not in seen:
+            seen.add(output)
+            out.append({"connector": output, "width": int(float(_key_value(lines, "placement_width") or 0)),
+                        "height": int(float(_key_value(lines, "placement_height") or 0)),
+                        "primary": len(out) == 0})
+    return out
+
+
+def remap_settings(text, output_map, current_outputs, saved_outputs):
+    """Reescreve output/monitores/placement sem perder a ordem dos widgets."""
+    blocks = _toml_blocks(text)
+    cur_by_name = {o["connector"]: o for o in current_outputs}
+    saved_by_name = {o["connector"]: o for o in saved_outputs}
+    primary = next((o for o in current_outputs if o["primary"]), current_outputs[0])
+
+    # IDs de lockscreen (@connector) e seções de wallpaper que viram duplicata.
+    # Quando vários outputs antigos caem no mesmo conector, prefere o que era
+    # primário na máquina original.
+    preferred = next((o["connector"] for o in saved_outputs if o.get("primary")), None)
+    renamed_locks, dup_locks, kept_locks = {}, set(), {}
+    renamed_wall, dup_wall, kept_wall = {}, set(), {}
+    for header, _lines in blocks:
+        if not header:
+            continue
+        if header.startswith("lockscreen_widgets.widget."):
+            ident = _lock_ident(header)
+            if ident and "@" in ident:
+                base, old = ident.rsplit("@", 1)
+                new = base + "@" + output_map.get(old, old)
+                renamed_locks[ident] = new
+                if new in kept_locks:
+                    if old == preferred:
+                        dup_locks.discard(kept_locks[new])
+                        dup_locks.add(ident)
+                        kept_locks[new] = ident
+                    else:
+                        dup_locks.add(ident)
+                else:
+                    kept_locks[new] = ident
+        m = re.match(r'^wallpaper\.monitors\.("?)([^"]+)\1$', header)
+        if m:
+            old = m.group(2)
+            new = output_map.get(old, old)
+            renamed_wall[old] = new
+            if new in kept_wall:
+                if old == preferred:
+                    dup_wall.discard(kept_wall[new])
+                    dup_wall.add(old)
+                    kept_wall[new] = old
+                else:
+                    dup_wall.add(old)
+            else:
+                kept_wall[new] = old
+
+    result, widgets = [], 0
+    for header, lines in blocks:
+        new_header = header
+        if header and header.startswith("lockscreen_widgets.widget."):
+            ident = _lock_ident(header)
+            if ident in dup_locks:
+                continue
+            if ident in renamed_locks:
+                new_header = re.sub(r'"[^"]*"', '"' + renamed_locks[ident] + '"', header, count=1)
+        if header:
+            m = re.match(r'^wallpaper\.monitors\.("?)([^"]+)\1$', header)
+            if m:
+                if m.group(2) in dup_wall:
+                    continue
+                new_header = f'wallpaper.monitors.{output_map.get(m.group(2), m.group(2))}'
+        if header != new_header and new_header is not None:
+            for i, line in enumerate(lines):
+                if re.match(r"^\s*\[", line):
+                    lines[i] = re.sub(r"^(\s*\[)[^\]]+(\])", lambda mm: mm.group(1) + new_header + mm.group(2), line)
+                    break
+
+        m = re.match(r"^(desktop_widgets|lockscreen_widgets)\.widget\.", header or "")
+        if m and (header or "").rstrip().endswith(".settings"):
+            m = None  # bloco de settings não é um widget novo
+        if not m:
+            # widget_order do lockscreen: troca os sufixos @connector e remove duplicatas
+            if header in ("desktop_widgets", "lockscreen_widgets"):
+                new_lines = []
+                for line in lines:
+                    if line.lstrip().startswith("widget_order") and header == "lockscreen_widgets":
+                        ids = re.findall(r'"[^"]*"', line)
+                        kept = []
+                        for q in ids:
+                            ident = q[1:-1]
+                            if ident in dup_locks:
+                                continue
+                            if "@" in ident:
+                                base, old = ident.rsplit("@", 1)
+                                ident = base + "@" + output_map.get(old, old)
+                            kept.append('"' + ident + '"')
+                        line = re.sub(r"\[[^\]]*\]", "[" + ", ".join(kept) + "]", line, count=1)
+                    new_lines.append(line)
+                lines = new_lines
+            result.extend(lines)
+            continue
+
+        widgets += 1 if m.group(1) == "desktop_widgets" else 0
+        old_output = _key_value(lines, "output")
+        if not old_output:
+            ident = _lock_ident(header or "")
+            old_output = ident.rsplit("@", 1)[-1] if ident and "@" in ident else ""
+        new_output = output_map.get(old_output)
+        if not new_output:
+            new_output = old_output if old_output in cur_by_name else primary["connector"]
+        old_dim = saved_by_name.get(old_output, {})
+        old_w = int(float(old_dim.get("width") or _key_value(lines, "placement_width") or 0)) or 1
+        old_h = int(float(old_dim.get("height") or _key_value(lines, "placement_height") or 0)) or 1
+        new_dim = cur_by_name.get(new_output, primary)
+        new_w = int(float(new_dim.get("width") or old_w))
+        new_h = int(float(new_dim.get("height") or old_h))
+        sx, sy = new_w / old_w, new_h / old_h
+
+        new_lines = []
+        for line in lines:
+            if re.match(r"^\s*output\s*=", line):
+                line = _set_key(line, "output", new_output, quote=True)
+            elif re.match(r"^\s*placement_width\s*=", line):
+                line = _set_key(line, "placement_width", new_w)
+            elif re.match(r"^\s*placement_height\s*=", line):
+                line = _set_key(line, "placement_height", new_h)
+            elif re.match(r"^\s*cx\s*=", line):
+                old = _key_value([line], "cx")
+                if old:
+                    line = _set_key(line, "cx", round(float(old) * sx, 2))
+            elif re.match(r"^\s*cy\s*=", line):
+                old = _key_value([line], "cy")
+                if old:
+                    line = _set_key(line, "cy", round(float(old) * sy, 2))
+            new_lines.append(line)
+        result.extend(new_lines)
+
+    return "".join(result), output_map, widgets
+
+
 def copy_tree(src, dst, sanitize=False, expand=False, skip=()):
     """Copia árvore; opcionalmente troca HOME por '~' (ou o contrário) em texto."""
     src, dst = Path(src), Path(dst)
@@ -294,18 +599,38 @@ def cmd_save(args):
         assets[portable(p)] = str(dst.relative_to(prof))
 
     plugins = settings.get("plugins", {}) or {}
+    desktop = settings.get("desktop_widgets", {}) or {}
+    widget_types = [{
+        "id": wid,
+        "type": str(w.get("type", "")),
+        "output": str(w.get("output", "")),
+    } for wid, w in (desktop.get("widget") or {}).items() if isinstance(w, dict)]
+    desktop_manifest = dict(desktop)
+    desktop_manifest["widget_count"] = len(widget_types)
+    desktop_manifest["widget_types"] = widget_types
+
+    local_plugins = []
+    local_root = prof / "local-plugins"
+    if local_root.is_dir():
+        local_plugins += [d.name for d in sorted(local_root.iterdir()) if d.is_dir()]
+    if LOCAL_PLUGINS_CFG.is_dir():
+        local_plugins += [d.name for d in sorted(LOCAL_PLUGINS_CFG.iterdir()) if d.is_dir()]
+
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "name": name,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
         "hostname": socket.gethostname(),
+        "home": portable(HOME),                   # "~" — sem vazamento de usuário
         "noctalia_version": noctalia_version(),
         "noctalia": noctalia_version(),          # compat v1
+        "outputs": detect_outputs(),
         "plugins": {
             "enabled": list(plugins.get("enabled") or []),
             "sources": manifest_sources(settings),
+            "local_plugins": sorted(set(local_plugins)),
         },
-        "desktop_widgets": settings.get("desktop_widgets", {}),
+        "desktop_widgets": desktop_manifest,
         "assets": assets,
         "wallpapers": assets,                     # compat v1
         "checksums": compute_checksums(prof),
@@ -466,19 +791,51 @@ def restore_backup(backup):
 
 
 # ── apply ────────────────────────────────────────────────────────────────────
+def enrich_from_snapshot(manifest, prof):
+    """Manifest v1 não registrava plugins/widget_types: completa pelo settings."""
+    snap = prof / "settings.toml"
+    if not snap.exists():
+        return manifest
+    try:
+        s = load_settings(snap)
+    except Exception as e:
+        log(f"aviso: settings.toml do perfil ilegível: {e}")
+        return manifest
+    plugins = manifest.setdefault("plugins", {})
+    if not plugins.get("enabled"):
+        plugins["enabled"] = list((s.get("plugins") or {}).get("enabled") or [])
+    if not plugins.get("sources"):
+        plugins["sources"] = manifest_sources(s)
+    desktop = manifest.setdefault("desktop_widgets", {})
+    if not desktop.get("widget_types"):
+        types = [{"id": wid, "type": str(w.get("type", "")),
+                  "output": str(w.get("output", ""))}
+                 for wid, w in ((s.get("desktop_widgets") or {}).get("widget") or {}).items()
+                 if isinstance(w, dict)]
+        desktop["widget_types"] = types
+        desktop.setdefault("widget_count", len(types))
+    return manifest
+
+
 def apply_profile(name, args):
     prof = PROFILES / safe_name(name)
     if not prof.is_dir():
         raise SystemExit(f"perfil não encontrado: {prof}")
     manifest = read_manifest(prof)
     schema = int(manifest.get("schema_version", 1) or 1)
+    enrich_from_snapshot(manifest, prof)
     installed, missing = [], []
 
     if args.dry_run:
         phase("simulação (dry-run)")
         emit(f"PROFILE={manifest.get('name', safe_name(name))}")
         emit("DRY_RUN=1")
-        emit("INSTALLED_PLUGINS=" + ",".join(installed))
+        emit(f"WIDGETS_RESTORED={len((manifest.get('desktop_widgets') or {}).get('widget_types') or [])}")
+        emit("OUTPUT_REMAP=" + ",".join(
+            f"{k}->{v}" for k, v in build_output_map(
+                manifest.get("outputs") or [], detect_outputs()).items()))
+        emit("PLUGINS_INSTALLED=" + ",".join(installed))
+        emit("INSTALLED_PLUGINS=" + ",".join(installed))  # compat painel antigo
         emit("MISSING_PLUGINS=" + ",".join(missing))
         log("dry-run: nada foi alterado")
         return manifest
@@ -489,6 +846,33 @@ def apply_profile(name, args):
         phase(f"instalando plugins 0/{len(manifest.get('plugins', {}).get('enabled') or [])}")
         install_sources(prof, manifest, args, installed, rewrites)
         wanted = install_plugins(manifest, installed, missing)
+
+        # Tipos de widget vindos de plugin precisam do plugin habilitado.
+        widget_types = (manifest.get("desktop_widgets") or {}).get("widget_types") or []
+        enabled_set = set(wanted)
+        for w in widget_types:
+            wtype = str(w.get("type", ""))
+            if ":" not in wtype or "/" not in wtype.split(":", 1)[0]:
+                continue
+            owner = wtype.split(":", 1)[0]
+            if owner not in enabled_set and owner not in missing:
+                missing.append(owner)
+                emit(f"ERROR=plugin {owner} do widget {w.get('id')} não está habilitado")
+
+        phase("remapeando monitors")
+        current_outputs = detect_outputs()
+        saved_outputs = manifest.get("outputs") or []
+        snap = prof / "settings.toml"
+        snap_text = snap.read_text(encoding="utf-8") if snap.exists() else ""
+        if not saved_outputs:
+            saved_outputs = outputs_from_settings_text(snap_text)
+        output_map = build_output_map(saved_outputs, current_outputs)
+        if current_outputs:
+            emit("OUTPUT_REMAP=" + ",".join(f"{k}->{v}" for k, v in output_map.items()))
+        else:
+            emit("AVISO=nenhum output detectado na máquina de destino")
+        manifest["output_remap"] = output_map
+        widgets_restored = 0
 
         phase("restaurando config")
         copy_tree(prof / "config", CFG_DIR, expand=True)
@@ -513,20 +897,29 @@ def apply_profile(name, args):
                 shutil.copy2(src, fb)
                 rewrites[orig] = str(fb)
 
-        snap = prof / "settings.toml"
+        phase("restaurando widgets")
         if snap.exists():
-            txt = expand_text(snap.read_text(encoding="utf-8"))
+            txt = expand_text(snap_text)
             for old, new in rewrites.items():
                 txt = txt.replace(unportable(old), unportable(new))
+            if current_outputs:
+                txt, output_map, widgets_restored = remap_settings(
+                    txt, output_map, current_outputs, saved_outputs)
+                manifest["output_remap"] = output_map
             tmp = SETTINGS.with_suffix(".toml.tmp")
             SETTINGS.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(txt, encoding="utf-8")
             os.replace(tmp, SETTINGS)
+            # rastreabilidade: grava o remap usado dentro do próprio perfil
+            write_manifest(prof, manifest)
 
         phase("recarregando shell")
         ok, out, err = run_cmd(["noctalia", "msg", "config-reload"], timeout=20)
         if not ok:
             emit(f"AVISO=config-reload falhou: {err or out}")
+        ok, out, err = run_cmd(["noctalia", "msg", "desktop-widgets-show"], timeout=20)
+        if not ok and "unknown" not in err.lower():
+            emit(f"AVISO=desktop-widgets-show falhou: {err or out}")
 
         # gerador de frames embarcado (nunca PATH). A variável de ambiente
         # permite importações headless/testes sem recriar molduras.
@@ -551,6 +944,13 @@ def apply_profile(name, args):
             actual_order = (now.get("desktop_widgets") or {}).get("widget_order")
             if expected_order is not None and actual_order != expected_order:
                 diffs.append("desktop_widgets.widget_order")
+            for section in ("desktop_widgets", "lockscreen_widgets"):
+                for widget in ((now.get(section) or {}).get("widget") or {}).values():
+                    if isinstance(widget, dict) and widget.get("output") not in (
+                            None, "") and current_outputs and widget["output"] not in (
+                                o["connector"] for o in current_outputs):
+                        diffs.append(f"output inválido:{widget['output']}")
+                        break
         except Exception as e:
             diffs.append(f"settings.toml ilegível: {e}")
         for orig, rel in assets.items():
@@ -562,9 +962,12 @@ def apply_profile(name, args):
             emit(f"DIFF={d}")
         emit(f"PROFILE={manifest.get('name', safe_name(name))}")
         emit("APPLIED=1")
-        emit("INSTALLED_PLUGINS=" + ",".join(installed))
+        emit(f"WIDGETS_RESTORED={widgets_restored}")
+        emit("OUTPUT_REMAP=" + ",".join(f"{k}->{v}" for k, v in output_map.items()))
+        emit("PLUGINS_INSTALLED=" + ",".join(installed))
+        emit("INSTALLED_PLUGINS=" + ",".join(installed))  # compat painel/service antigos
         emit("MISSING_PLUGINS=" + ",".join(missing))
-        log(f"perfil '{name}' aplicado (schema v{schema})")
+        log(f"perfil '{name}' aplicado (schema v{schema}, {widgets_restored} widgets)")
         return manifest
     except Exception as e:
         restore_backup(backup)

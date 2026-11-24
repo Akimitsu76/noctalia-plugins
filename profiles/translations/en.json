@@ -34,12 +34,14 @@
     }
   },
   "panel": {
-    "phase_import": "Installing plugins and restoring config…",
-    "phase_apply": "Installing plugins and applying profile…",
+    "phase_import": "Installing plugins, remapping monitors and restoring widgets…",
+    "phase_apply": "Installing plugins, remapping monitors and restoring widgets…",
     "imported_applied": "Imported and applied: {name}{extra}",
     "imported_applying": "Imported: {name}. Applying…",
     "applied": "Profile '{name}' applied.{extra}",
+    "widgets_restored": " · {count} widget(s) restored",
     "plugins_installed": " · {count} plugin(s) installed",
+    "output_remap": " · monitors: {map}",
     "missing": " · missing: {list}",
     "need_zenity": "zenity not found — type the .tar.gz path instead.",
     "choose_file": "Choose a .tar.gz file.",

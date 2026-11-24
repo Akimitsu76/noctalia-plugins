@@ -47,7 +47,7 @@ elif a[:3] == ["msg", "plugins", "enable"]:
     (noctalia_state / "plugins" / "materialized" / "test" / pid.split("/")[-1]).mkdir(
         parents=True, exist_ok=True)
 
-elif a[:2] == ["msg", "config-reload"]:
+elif a[:2] in (["msg", "config-reload"], ["msg", "desktop-widgets-show"]):
     pass
 
 else:
