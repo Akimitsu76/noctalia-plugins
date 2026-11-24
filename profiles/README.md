@@ -35,25 +35,29 @@ O manifesto v1 (com `wallpapers` em vez de `assets`) continua sendo lido.
 Antes de sobrescrever qualquer coisa, o CLI `noctalia-profile`:
 
 1. lê o manifesto e descobre as fontes/plugins declarados;
-2. adiciona cada fonte git/paths que não existe e roda `plugins update <fonte>`;
-3. **pula imediatamente** qualquer plugin já `enabled` na máquina (sem chamar
+2. descobre as dependências nativas dos plugins que fornecem widgets e instala
+   as conhecidas — `aurora-ncs` (renderizador do NCS Visualizer) é clonado e
+   compilado em `~/.local/bin` sem sudo. O que não puder ser instalado aparece
+   em `MISSING_DEPENDENCIES=` e nunca aborta o apply;
+3. adiciona cada fonte git/paths que não existe e roda `plugins update <fonte>`;
+4. **pula imediatamente** qualquer plugin já `enabled` na máquina (sem chamar
    `plugins enable` e sem esperar `materialized/`, que nem sempre é criado);
    habilita apenas os ausentes/`disabled` e espera no máximo **5 s** pela
    confirmação. Falhas viram `MISSING_PLUGINS=` e nunca impedem o remapeamento;
-4. copia plugins `path` embarcados para
+5. copia plugins `path` embarcados para
    `~/.local/share/noctalia/user-plugins/<fonte>` e reescreve o `location` no
    `settings.toml`;
-5. detecta os outputs atuais, monta o `output_map` (o primário salvo vai para o
+6. detecta os outputs atuais, monta o `output_map` (o primário salvo vai para o
    primário atual; os demais são distribuídos na ordem; com um só monitor, todos
    são espelhados nele) e **reescreve uma cópia do `settings.toml`** antes de
    aplicar: `output` dos widgets, ids `@conector` do lockscreen, seções
    `[wallpaper.monitors.<nome>]`, `placement_width/height` e `cx/cy`
    escalados para a resolução atual;
-6. restaura `config/`, `plugins-data/`, `frames/`, `local-plugins/`, assets e o
+7. restaura `config/`, `plugins-data/`, `frames/`, `local-plugins/`, assets e o
    `settings.toml` remapeado (backup timestampado e rollback em caso de falha);
-7. roda `noctalia msg config-reload`, `noctalia msg desktop-widgets-show` e o
+8. roda `noctalia msg config-reload`, `noctalia msg desktop-widgets-show` e o
    gerador de molduras embarcado;
-8. confere plugins habilitados, `widget_order`, outputs inválidos e existência
+9. confere plugins habilitados, `widget_order`, outputs inválidos e existência
    dos assets, reportando diferenças em linhas `DIFF=`.
 
 Nenhum widget fica apontando para um conector que não existe na máquina de
@@ -70,6 +74,8 @@ PHASE=recarregando shell
 OUTPUT_REMAP=DP-3->eDP-1
 WIDGETS_RESTORED=14
 APPLIED=1
+DEPENDENCIES_INSTALLED=dep:aurora-ncs
+MISSING_DEPENDENCIES=playerctl,syncedlyrics
 PLUGINS_INSTALLED=source:akimitsu,victor/profiles,foo/bar
 INSTALLED_PLUGINS=source:akimitsu,victor/profiles,foo/bar
 MISSING_PLUGINS=
@@ -82,6 +88,9 @@ antigos; `PLUGINS_INSTALLED=` é o nome novo.
 
 - borda externa `#6b0f2a` (3 px) e interna `#8a1230` (2 px), cantos quadrados
 - stickers com proporção livre — largura e altura ajustáveis separadamente
+- **GIFs animados**: o widget extrai os frames com `ffmpeg`/`ffprobe` e troca o
+  frame exibido em `onFrameTick`; o cache fica em `plugins/data/victor/profiles/gif-cache`
+  e é invalidado quando o arquivo muda. Sem `ffmpeg`, o GIF aparece parado;
 - label "Akimitsu76" com borda única
 - aplicação automática a widgets novos via serviço `frames` + systemd path unit
 

@@ -8,10 +8,11 @@
 #
 id = "victor/profiles"
 name = "Profiles"
-version = "1.5.1"
+version = "1.5.2"
 plugin_api = 46
 author = "victor"
 license = "MIT"
+dependencies = ["ffmpeg"]  # ffmpeg/ffprobe animam GIFs no widget de adesivo
 tags = ["system", "backup", "desktop", "personalization"]
 icon = "save"
 description = "Snapshot completo e portatil do desktop Noctalia (config, widgets, layout, frames, fontes, cores, wallpaper, plugins e assets). Remapeia monitores e reinstala plugins automaticamente na maquina de destino, sem install.sh."

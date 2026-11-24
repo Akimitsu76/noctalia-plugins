@@ -173,6 +173,8 @@ local function machineInfo(out)
         lastPhase = #phases > 0 and phases[#phases] or "",
         installed = trim((out:match("PLUGINS_INSTALLED=([^\r\n]*)")
             or out:match("INSTALLED_PLUGINS=([^\r\n]*)") or "")),
+        installedDeps = trim(out:match("DEPENDENCIES_INSTALLED=([^\r\n]*)") or ""),
+        missingDeps = trim(out:match("MISSING_DEPENDENCIES=([^\r\n]*)") or ""),
         missing = trim(out:match("MISSING_PLUGINS=([^\r\n]*)") or ""),
         widgets = tonumber(trim(out:match("WIDGETS_RESTORED=(%d+)") or "")) or 0,
         remap = trim(out:match("OUTPUT_REMAP=([^\r\n]*)") or ""),
@@ -206,6 +208,14 @@ local function describeResult(info)
     if info.remap ~= "" then
         table.insert(parts, tr("output_remap", { map = info.remap },
             "monitores: " .. info.remap))
+    end
+    if countList(info.installedDeps) > 0 then
+        table.insert(parts, tr("dependencies_installed", { count = countList(info.installedDeps) },
+            countList(info.installedDeps) .. " dependência(s) instalada(s)"))
+    end
+    if info.missingDeps ~= "" then
+        table.insert(parts, tr("missing_deps", { list = info.missingDeps },
+            "dependências: " .. info.missingDeps))
     end
     if info.missing ~= "" then
         table.insert(parts, tr("missing", { list = info.missing },

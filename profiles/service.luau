@@ -75,6 +75,8 @@ local function machineInfo(out)
         lastPhase = #phases > 0 and phases[#phases] or "",
         installed = clean(text:match("PLUGINS_INSTALLED=([^\r\n]*)")
             or text:match("INSTALLED_PLUGINS=([^\r\n]*)") or ""),
+        installedDeps = clean(text:match("DEPENDENCIES_INSTALLED=([^\r\n]*)") or ""),
+        missingDeps = clean(text:match("MISSING_DEPENDENCIES=([^\r\n]*)") or ""),
         missing = clean(text:match("MISSING_PLUGINS=([^\r\n]*)") or ""),
         widgets = tonumber(clean(text:match("WIDGETS_RESTORED=(%d+)") or "")) or 0,
         remap = clean(text:match("OUTPUT_REMAP=([^\r\n]*)") or ""),
@@ -137,6 +139,10 @@ local function summary(info)
     local n = countList(info.installed)
     if n > 0 then table.insert(parts, n .. " plugin(s)/fonte(s) instalado(s)") end
     if info.remap ~= "" then table.insert(parts, "monitores: " .. info.remap) end
+    if countList(info.installedDeps) > 0 then
+        table.insert(parts, countList(info.installedDeps) .. " dependência(s) instalada(s)")
+    end
+    if info.missingDeps ~= "" then table.insert(parts, "dependências: " .. info.missingDeps) end
     if info.missing ~= "" then table.insert(parts, "faltaram: " .. info.missing) end
     return table.concat(parts, " · ")
 end

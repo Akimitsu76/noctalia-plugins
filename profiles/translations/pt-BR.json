@@ -43,6 +43,8 @@
     "widgets_restored": " · {count} widget(s) restaurado(s)",
     "plugins_installed": " · {count} plugin(s) instalado(s)",
     "output_remap": " · monitores: {map}",
+    "dependencies_installed": " · {count} dependência(s) instalada(s)",
+    "missing_deps": " · dependências: {list}",
     "missing": " · faltaram: {list}",
     "need_zenity": "zenity não encontrado — digite o caminho do .tar.gz.",
     "choose_file": "Escolha um arquivo .tar.gz.",

@@ -114,10 +114,10 @@ def noctalia_version():
         return ""
 
 
-def run_cmd(argv, timeout=30):
+def run_cmd(argv, timeout=30, cwd=None):
     """Executa binário fixo (nunca algo vindo do perfil)."""
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
         return r.returncode == 0, (r.stdout or "").strip(), (r.stderr or "").strip()
     except subprocess.TimeoutExpired:
         return False, "", f"timeout após {timeout}s: {' '.join(argv)}"
@@ -499,6 +499,147 @@ def manifest_sources(settings):
     return sources
 
 
+def plugin_dependencies(manifest, prof=None, only_widgets=False):
+    """Dependências declaradas no manifesto e no plugin.toml dos plugins ativos.
+
+    only_widgets=True considera apenas plugins que fornecem widgets do perfil,
+    evitando exigir ferramentas de plugins que não participam do layout.
+    """
+    import tomllib
+    deps = set()
+    if not only_widgets:
+        deps = {str(d).strip() for d in (manifest.get("dependencies") or []) if str(d).strip()}
+    enabled = [p for p in (manifest.get("plugins", {}).get("enabled") or []) if "/" in p]
+    if only_widgets:
+        owners = set()
+        for w in ((manifest.get("desktop_widgets") or {}).get("widget_types") or []):
+            wtype = str(w.get("type", ""))
+            if ":" in wtype:
+                owners.add(wtype.split(":", 1)[0])
+        enabled = [p for p in enabled if p in owners]
+    roots = [p for p in (MATERIALIZED, LOCAL_PLUGINS_CFG, USER_PLUGINS) if p.exists()]
+    if prof is not None:
+        embedded = Path(prof) / "local-plugins"
+        if embedded.exists():
+            roots.append(embedded)
+
+    for pid in enabled:
+        slug = pid.split("/", 1)[-1]
+        for root in roots:
+            for pattern in ("*/*/plugin.toml", "*/plugin.toml"):
+                for toml in root.glob(pattern):
+                    if toml.parent.name != slug:
+                        continue
+                    try:
+                        data = tomllib.loads(toml.read_text(encoding="utf-8"))
+                    except Exception:
+                        continue
+                    if data.get("id") not in (None, pid):
+                        continue
+                    for dep in (data.get("dependencies") or []):
+                        if str(dep).strip():
+                            deps.add(str(dep).strip())
+    return sorted(deps)
+
+
+LAYERSHELLQT_PACKAGES = {
+    "pacman": "layer-shell-qt",
+    "apt-get": "liblayershellqtinterface-dev",
+    "dnf": "layer-shell-qt-devel",
+    "zypper": "layer-shell-qt6-devel",
+    "xbps-install": "layer-shell-qt",
+    "emerge": "kde-plasma/layershellqt",
+}
+
+
+def _install_layershellqt():
+    """Instala o header de build do aurora-ncs quando --yes foi dado."""
+    if os.environ.get("NOCTALIA_PROFILE_ASSUME_YES") != "1":
+        return False, "use --yes para instalar dependências de sistema"
+    for mgr, pkg in LAYERSHELLQT_PACKAGES.items():
+        if not shutil.which(mgr):
+            continue
+        if mgr == "pacman":
+            argv = [mgr, "-S", "--noconfirm", pkg]
+        elif mgr == "apt-get":
+            argv = [mgr, "install", "-y", pkg]
+        elif mgr == "dnf":
+            argv = [mgr, "install", "-y", pkg]
+        elif mgr == "zypper":
+            argv = [mgr, "install", "-y", pkg]
+        elif mgr == "xbps-install":
+            argv = [mgr, "-y", pkg]
+        else:
+            argv = [mgr, pkg]
+        if hasattr(os, "geteuid") and os.geteuid() != 0:
+            argv = ["sudo", "-n"] + argv
+        ok, out, err = run_cmd(argv, timeout=300)
+        if ok:
+            return True, f"{pkg} instalado"
+        return False, (f"falha ao instalar {pkg}: {err or out}; "
+                       f"execute manualmente: {' '.join(argv)}")
+    return False, "gerenciador de pacotes não reconhecido"
+
+
+def _install_aurora_ncs():
+    """Renderizador do NCS Visualizer: instalado em ~/.local/bin."""
+    url = "https://github.com/BiparJoy/noctalia-ncs-visualizer"
+    with tempfile.TemporaryDirectory(prefix="noctalia-dep-") as td:
+        repo = Path(td) / "repo"
+        ok, out, err = run_cmd(
+            ["git", "clone", "--depth", "1", url, str(repo)], timeout=180)
+        if not ok:
+            return False, f"git clone aurora-ncs falhou: {err or out}"
+        installer = repo / "install.sh"
+        if not installer.is_file():
+            return False, "repositório aurora-ncs não contém install.sh"
+        ok, out, err = run_cmd(["sh", str(installer)], timeout=300, cwd=repo)
+        if not ok and "LayerShellQt" in err:
+            fixed, msg = _install_layershellqt()
+            if not fixed:
+                return False, f"aurora-ncs precisa de LayerShellQt: {msg}"
+            ok, out, err = run_cmd(["sh", str(installer)], timeout=300, cwd=repo)
+        if not ok:
+            return False, f"install.sh aurora-ncs falhou: {err or out}"
+    if (HOME / ".local" / "bin" / "aurora-ncs").is_file() or shutil.which("aurora-ncs"):
+        return True, "aurora-ncs instalado em ~/.local/bin"
+    return False, "aurora-ncs não apareceu no PATH após install.sh"
+
+
+DEPENDENCY_INSTALLERS = {"aurora-ncs": _install_aurora_ncs}
+
+
+def dependency_available(dep):
+    return bool(shutil.which(dep) or (HOME / ".local" / "bin" / dep).is_file())
+
+
+def install_dependencies(manifest, installed, prof=None):
+    """Instala dependências nativas conhecidas; nunca aborta o apply."""
+    deps = plugin_dependencies(manifest, prof, only_widgets=True)
+    phase(f"instalando dependências 0/{len(deps)}")
+    missing_deps = []
+    for i, dep in enumerate(deps, 1):
+        if dependency_available(dep):
+            continue
+        installer = DEPENDENCY_INSTALLERS.get(dep)
+        if installer is None:
+            missing_deps.append(dep)
+            emit(f"AVISO=dependência {dep} não encontrada; instale manualmente")
+            continue
+        phase(f"instalando dependências {i}/{len(deps)}: {dep}")
+        ok, msg = installer()
+        if ok:
+            installed.append(f"dep:{dep}")
+            log(msg)
+        else:
+            missing_deps.append(dep)
+            emit(f"AVISO={msg}")
+    emit("DEPENDENCIES_INSTALLED=" + ",".join(
+        item for item in installed if item.startswith("dep:")))
+    emit("MISSING_DEPENDENCIES=" + ",".join(missing_deps))
+    return deps
+
+
 def collect_asset_paths(settings):
     found = []
 
@@ -630,6 +771,9 @@ def cmd_save(args):
             "sources": manifest_sources(settings),
             "local_plugins": sorted(set(local_plugins)),
         },
+        "dependencies": plugin_dependencies({
+            "plugins": {"enabled": list(plugins.get("enabled") or [])}
+        }),
         "desktop_widgets": desktop_manifest,
         "assets": assets,
         "wallpapers": assets,                     # compat v1
@@ -863,6 +1007,7 @@ def apply_profile(name, args):
     schema = int(manifest.get("schema_version", 1) or 1)
     enrich_from_snapshot(manifest, prof)
     installed, missing = [], []
+    deps = plugin_dependencies(manifest, prof, only_widgets=True)
 
     if args.dry_run:
         phase("simulação (dry-run)")
@@ -872,6 +1017,9 @@ def apply_profile(name, args):
         emit("OUTPUT_REMAP=" + ",".join(
             f"{k}->{v}" for k, v in build_output_map(
                 manifest.get("outputs") or [], detect_outputs()).items()))
+        emit("DEPENDENCIES_INSTALLED=")
+        emit("MISSING_DEPENDENCIES=" + ",".join(
+            dep for dep in deps if not dependency_available(dep)))
         emit("PLUGINS_INSTALLED=" + ",".join(installed))
         emit("INSTALLED_PLUGINS=" + ",".join(installed))  # compat painel antigo
         emit("MISSING_PLUGINS=" + ",".join(missing))
@@ -881,6 +1029,13 @@ def apply_profile(name, args):
     backup = make_backup(name)
     rewrites = {}
     try:
+        # Dependências nativas (aurora-ncs, ffmpeg, ...) antes dos plugins.
+        # Também é best-effort: falta de dependência nunca impede o remapeamento.
+        try:
+            install_dependencies(manifest, installed, prof)
+        except Exception as e:
+            emit(f"AVISO=fase de dependências incompleta: {e}")
+
         # Fase de plugins é best-effort: qualquer falha aqui vira MISSING_PLUGINS,
         # nunca impede o remapeamento e a restauração dos widgets.
         wanted = [p for p in (manifest.get("plugins", {}).get("enabled") or []) if "/" in p]
