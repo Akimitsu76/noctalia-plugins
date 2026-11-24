@@ -7,7 +7,7 @@ plugin de perfis góticos e todos os plugins futuros.
 
 | Plugin | ID | Descrição |
 |---|---|---|
-| Profiles | `victor/profiles` | Perfis completos de personalização do desktop (config, widgets, layout, molduras, fontes, cores, wallpaper e plugins) |
+| Profiles | `victor/profiles` | Perfis completos de personalização do desktop (config, widgets, layout, molduras, fontes, cores, wallpaper e plugins), com export/import em `.tar.gz` |
 
 ![Painel do plugin](docs/panel.png)
 
@@ -30,6 +30,18 @@ noctalia msg panel-toggle victor/profiles:profiles
 ```kdl
 Mod+Shift+P { spawn-sh "noctalia msg panel-toggle victor/profiles:profiles"; }
 ```
+
+## ✦ Exportar / importar perfis
+
+```bash
+noctalia-profile export desktop-principal                    # -> ~/Documents/noctalia-profiles/
+noctalia-profile export desktop-principal ~/Downloads/meu.tar.gz
+noctalia-profile import ~/Downloads/meu.tar.gz meu-tema --force
+```
+
+O pacote `.tar.gz` inclui `manifest.json`, `config/`, `settings.toml`,
+`plugins-data/` e `wallpapers/`. Também dá pelo painel: ícone de download em
+cada perfil e campo de importação.
 
 ## ✦ Atualizar
 
