@@ -53,10 +53,36 @@ local function resultInfo(r)
     return ok, out, err
 end
 
+-- Linhas machine-readable impressas pelo CLI v2.
+local function machineInfo(out)
+    local phases = {}
+    for line in tostring(out or ""):gmatch("[^\r\n]+") do
+        local p = line:match("^PHASE=(.+)$")
+        if p then table.insert(phases, p) end
+    end
+    return {
+        phases = phases,
+        installed = (out:match("INSTALLED_PLUGINS=([^\r\n]*)") or ""):gsub("^%s+", ""):gsub("%s+$", ""),
+        missing = (out:match("MISSING_PLUGINS=([^\r\n]*)") or ""):gsub("^%s+", ""):gsub("%s+$", ""),
+        errorLine = (out:match("ERROR=([^\r\n]+)") or ""):gsub("^%s+", ""):gsub("%s+$", ""),
+        applied = out:match("APPLIED=1") ~= nil,
+    }
+end
+
+local function countList(s)
+    local n = 0
+    if s ~= "" then for _ in s:gmatch("[^,]+") do n = n + 1 end end
+    return n
+end
+
 local function run(args, done)
+    -- Avisa no log em qual fase o CLI está (o runAsync devolve só o resultado
+    -- final, mas as linhas PHASE= vão todas no log ao terminar).
     noctalia.runAsync(cliArgv(args), function(r)
         local ok, out, err = resultInfo(r)
-        if done then done(out, ok, err) end
+        local info = machineInfo(out)
+        for _, p in ipairs(info.phases) do log("fase: " .. p) end
+        if done then done(out, ok, err, info) end
     end)
 end
 
@@ -70,50 +96,69 @@ local function clean(out)
     return (tostring(out or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+-- Causa concreta: nunca devolve só "comando falhou".
+local function reason(err, out, info)
+    if info.errorLine ~= "" then return info.errorLine end
+    local line = clean(err):match("[^\r\n]+")
+        or clean(out):match("[^\r\n]+")
+    if line and line ~= "" then return line end
+    return "falha ao executar " .. CMD
+end
+
+local function summary(info)
+    local parts = {}
+    local n = countList(info.installed)
+    if n > 0 then table.insert(parts, n .. " plugin(s)/fonte(s) instalado(s)") end
+    if info.missing ~= "" then table.insert(parts, "faltaram: " .. info.missing) end
+    return table.concat(parts, " · ")
+end
+
 local function handle(action, name, extra)
     log("acao=" .. tostring(action) .. " nome=" .. tostring(name))
     if action == "save" then
         if not name or name == "" then notify("Profiles", "uso: save <nome>"); return end
-        run({"save", name}, function(out, ok, err)
-            if not ok then notify("Erro ao salvar", clean(err)); return end
+        run({"save", name}, function(out, ok, err, info)
+            if not ok then notify("Erro ao salvar", reason(err, out, info)); return end
             notify("Perfil salvo", name)
         end)
     elseif action == "apply" then
         if not name or name == "" then notify("Profiles", "uso: apply <nome>"); return end
-        run({"apply", name}, function(out, ok, err)
-            if not ok then notify("Erro ao aplicar", clean(err)); return end
-            notify("Perfil aplicado", name)
+        run({"apply", name, "--yes"}, function(out, ok, err, info)
+            if not ok then notify("Erro ao aplicar", reason(err, out, info)); return end
+            notify("Perfil aplicado", name .. "\n" .. summary(info))
         end)
     elseif action == "list" then
-        run({"list"}, function(out, ok, err)
-            if not ok then notify("Erro", clean(err)); return end
+        run({"list"}, function(out, ok, err, info)
+            if not ok then notify("Erro", reason(err, out, info)); return end
             notify("Perfis", clean(out) ~= "" and clean(out) or "nenhum perfil salvo")
         end)
     elseif action == "delete" then
         if not name or name == "" then notify("Profiles", "uso: delete <nome>"); return end
-        run({"delete", name}, function(out, ok, err)
-            if not ok then notify("Erro ao remover", clean(err)); return end
+        run({"delete", name}, function(out, ok, err, info)
+            if not ok then notify("Erro ao remover", reason(err, out, info)); return end
             notify("Perfil removido", name)
         end)
     elseif action == "export" then
         if not name or name == "" then notify("Profiles", "uso: export <nome> [arquivo.tar.gz]"); return end
         local args = {"export", name}
         if extra and extra ~= "" then table.insert(args, extra) end
-        run(args, function(out, ok, err)
-            if not ok then notify("Erro ao exportar", clean(err)); return end
+        run(args, function(out, ok, err, info)
+            if not ok then notify("Erro ao exportar", reason(err, out, info)); return end
             notify("Perfil exportado", clean(out):match("(%S+%.tar%.gz)") or clean(out))
         end)
     elseif action == "import" then
         if not name or name == "" then notify("Profiles", "uso: import <arquivo.tar.gz> [nome]"); return end
         local args = {"import", name}
         if extra and extra ~= "" then table.insert(args, extra) end
-        run(args, function(out, ok, err)
+        table.insert(args, "--yes")
+        run(args, function(out, ok, err, info)
             local pname = clean(out):match("PROFILE=([^\r\n]+)")
             if not ok and not pname then
-                notify("Erro ao importar", clean(err) ~= "" and clean(err) or "falha ao executar " .. CMD)
+                notify("Erro ao importar", reason(err, out, info))
                 return
             end
-            notify(out:match("APPLIED=1") and "Perfil importado e aplicado" or "Perfil importado", pname or "perfil")
+            notify(info.applied and "Perfil importado e aplicado" or "Perfil importado",
+                (pname or "perfil") .. "\n" .. summary(info))
         end)
     else
         notify("Profiles", "acao desconhecida: " .. tostring(action) ..

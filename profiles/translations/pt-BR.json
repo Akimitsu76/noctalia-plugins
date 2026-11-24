@@ -32,5 +32,17 @@
         "description": "Peso do texto do label"
       }
     }
+  },
+  "panel": {
+    "phase_import": "Instalando plugins e restaurando config…",
+    "phase_apply": "Instalando plugins e aplicando perfil…",
+    "imported_applied": "Importado e aplicado: {name}{extra}",
+    "imported_applying": "Importado: {name}. Aplicando…",
+    "applied": "Perfil '{name}' aplicado.{extra}",
+    "plugins_installed": " · {count} plugin(s) instalado(s)",
+    "missing": " · faltaram: {list}",
+    "need_zenity": "zenity não encontrado — digite o caminho do .tar.gz.",
+    "choose_file": "Escolha um arquivo .tar.gz.",
+    "picking": "Escolha o arquivo na janela que abriu…"
   }
 }

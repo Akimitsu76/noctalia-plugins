@@ -41,6 +41,25 @@ local function trim(s)
     return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+-- Chaves novas em translations/{pt-BR,en}.json; fallback mantém o painel
+-- legível mesmo em versões antigas do Noctalia sem noctalia.tr.
+local function tr(key, subst, fallback)
+    if noctalia.tr then
+        local ok, value = pcall(noctalia.tr, "panel." .. key, subst)
+        if ok and type(value) == "string" and value ~= ""
+            and not value:find("^panel%.") then
+            return value
+        end
+    end
+    local out = fallback or key
+    if type(subst) == "table" then
+        for k, v in pairs(subst) do
+            out = out:gsub("{" .. k .. "}", tostring(v))
+        end
+    end
+    return out
+end
+
 local function shellQuote(s)
     return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
 end
@@ -130,16 +149,46 @@ local function manifestField(name, field)
     return decoded[field]
 end
 
-local function runProfile(args, onDone)
+local function machineInfo(out)
+    local phases = {}
+    for line in tostring(out or ""):gmatch("[^\r\n]+") do
+        local p = line:match("^PHASE=(.+)$")
+        if p then table.insert(phases, p) end
+    end
+    return {
+        phases = phases,
+        installed = trim(out:match("INSTALLED_PLUGINS=([^\r\n]*)") or ""),
+        missing = trim(out:match("MISSING_PLUGINS=([^\r\n]*)") or ""),
+        errorLine = trim(out:match("ERROR=([^\r\n]+)") or ""),
+        applied = out:match("APPLIED=1") ~= nil,
+    }
+end
+
+local function countList(s)
+    local n = 0
+    if s ~= "" then for _ in s:gmatch("[^,]+") do n = n + 1 end end
+    return n
+end
+
+local function runProfile(args, onDone, initialStatus)
     busy = true
-    setStatus("Executando…", "info")
+    setStatus(initialStatus or "Executando…", "info")
     render()
     noctalia.runAsync(cliArgv(args), function(r)
         busy = false
         local ok, out, err = resultInfo(r)
+        local info = machineInfo(out)
         refreshProfiles()
+        pcall(function()
+            if noctalia.log then
+                for _, p in ipairs(info.phases) do
+                    noctalia.log("[profiles] fase: " .. p)
+                end
+            end
+        end)
         if not ok then
-            local msg = trim(err):match("[^\r\n]+")
+            local msg = info.errorLine ~= "" and info.errorLine
+                or trim(err):match("[^\r\n]+")
                 or trim(out):match("[^\r\n]+")
                 or ("falha ao executar " .. CMD)
             setStatus("Erro: " .. msg, "err")
@@ -151,7 +200,7 @@ local function runProfile(args, onDone)
                 end
             end)
         end
-        if onDone then onDone(out, ok, err) end
+        if onDone then onDone(out, ok, err, info) end
         render()
     end)
 end
@@ -170,7 +219,7 @@ local function doImport(pathArg)
     local guess = path:match("([^/]+)%.tar%.gz$") or "perfil"
     local before = manifestField(guess, "imported_at")
 
-    runProfile({ "import", path }, function(out, ok)
+    runProfile({ "import", path, "--yes" }, function(out, ok, err, info)
         -- O CLI imprime o nome real do perfil (pode vir do manifesto, nao do arquivo).
         local name = trim(out:match("PROFILE=([^\r\n]+)") or "")
         if name == "" then name = guess end
@@ -182,23 +231,45 @@ local function doImport(pathArg)
 
         selected = name
         refreshProfiles()
-        if out:match("APPLIED=1") then
-            setStatus("Importado e aplicado: " .. name, "ok")
+        local extra = ""
+        local nInst = countList(info.installed)
+        if nInst > 0 then
+            extra = extra .. tr("plugins_installed", { count = nInst },
+                " · " .. nInst .. " plugin(s) instalado(s)")
+        end
+        if info.missing ~= "" then
+            extra = extra .. tr("missing", { list = info.missing },
+                " · faltaram: " .. info.missing)
+        end
+
+        if info.applied then
+            setStatus(tr("imported_applied", { name = name, extra = extra },
+                "Importado e aplicado: " .. name .. extra), "ok")
         else
             -- CLI antigo (ou aplicacao pulada): garante a aplicacao aqui.
-            setStatus("Importado: " .. name .. ". Aplicando…", "info")
+            setStatus(tr("imported_applying", { name = name },
+                "Importado: " .. name .. ". Aplicando…"), "info")
             render()
-            runProfile({ "apply", name }, function(_, ok2)
-                if ok2 then setStatus("Importado e aplicado: " .. name, "ok") end
-            end)
+            runProfile({ "apply", name, "--yes" }, function(_, ok2, _, info2)
+                if ok2 then
+                    local more = ""
+                    if countList(info2.installed) > 0 then
+                        more = tr("plugins_installed", { count = countList(info2.installed) },
+                            " · " .. countList(info2.installed) .. " plugin(s) instalado(s)")
+                    end
+                    setStatus(tr("imported_applied", { name = name, extra = extra .. more },
+                        "Importado e aplicado: " .. name .. extra .. more), "ok")
+                end
+            end, tr("phase_apply", nil, "Instalando plugins e aplicando perfil…"))
         end
-    end)
+    end, tr("phase_import", nil, "Instalando plugins e restaurando config…"))
 end
 
 local function pickFile()
     if busy then return end
     if not noctalia.commandExists or not noctalia.commandExists("zenity") then
-        setStatus("zenity nao encontrado — digite o caminho do .tar.gz.", "err")
+        setStatus(tr("need_zenity", nil,
+            "zenity nao encontrado — digite o caminho do .tar.gz."), "err")
         render()
         return
     end
@@ -380,10 +451,16 @@ function render()
                     setStatus("Selecione um perfil na lista.", "err"); render(); return
                 end
                 local target = selected
-                runProfile({ "apply", target }, function(out, ok)
+                runProfile({ "apply", target, "--yes" }, function(out, ok, _, info)
                     if not ok then return end
-                    setStatus("Perfil '" .. target .. "' aplicado.", "ok")
-                end)
+                    local extra = ""
+                    if info.installed ~= "" then
+                        extra = tr("plugins_installed", { count = countList(info.installed) },
+                            " · " .. countList(info.installed) .. " plugin(s) instalado(s)")
+                    end
+                    setStatus(tr("applied", { name = target, extra = extra },
+                        "Perfil '" .. target .. "' aplicado." .. extra), "ok")
+                end, tr("phase_apply", nil, "Instalando plugins e aplicando perfil…"))
             end,
         }),
     })
