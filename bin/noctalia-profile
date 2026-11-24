@@ -10,12 +10,14 @@ Captura e restaura TUDO:
   - manifest.json (host, data, versao do noctalia, mapa de wallpapers)
 
 Uso:
-  noctalia-profile save  <nome>
-  noctalia-profile apply <nome>
+  noctalia-profile save   <nome>
+  noctalia-profile apply  <nome>
   noctalia-profile list
   noctalia-profile delete <nome>
+  noctalia-profile export <nome> [arquivo.tar.gz]
+  noctalia-profile import <arquivo.tar.gz> [nome] [--force]
 """
-import argparse, json, os, re, shutil, socket, subprocess, sys
+import argparse, json, os, re, shutil, socket, subprocess, sys, tarfile, tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -27,8 +29,15 @@ SETTINGS = STATE_DIR / "settings.toml"
 PROFILES = STATE_DIR / "profiles"
 PLUGIN_DATA = STATE_DIR / "plugins" / "data"
 FALLBACK_WALL_DIR = HOME / "Imagens" / "wallpapers"
+EXPORT_DIR = HOME / "Documents" / "noctalia-profiles"
+PACKAGE_VERSION = 1
 
 def log(m): print(f"[noctalia-profile] {m}", file=sys.stderr)
+
+def safe_name(name):
+    """Nome de perfil seguro para usar como diretorio."""
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", str(name)).strip("._")
+    return name or "perfil"
 
 def noctalia_version():
     try:
@@ -171,6 +180,87 @@ def cmd_apply(args):
         log("noctalia nao encontrado; recarregue manualmente")
     log(f"perfil '{args.name}' aplicado")
 
+# ── export / import ─────────────────────────────────────────────────────────
+def cmd_export(args):
+    """Empacota um perfil salvo num .tar.gz portatil."""
+    prof = PROFILES / safe_name(args.name)
+    if not prof.is_dir():
+        raise SystemExit(f"perfil nao encontrado: {prof}")
+
+    out = Path(args.output).expanduser() if getattr(args, "output", None) else \
+        EXPORT_DIR / f"{safe_name(args.name)}.tar.gz"
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    # registra metadados do pacote no manifesto
+    mf = prof / "manifest.json"
+    manifest = {}
+    if mf.exists():
+        try: manifest = json.loads(mf.read_text(encoding="utf-8"))
+        except Exception: manifest = {}
+    manifest["name"] = manifest.get("name") or safe_name(args.name)
+    manifest["exported_at"] = datetime.now().isoformat(timespec="seconds")
+    manifest["package_version"] = PACKAGE_VERSION
+    mf.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # arcname relativo: nao embute o caminho absoluto do usuario
+    with tarfile.open(out, "w:gz") as tf:
+        for item in sorted(prof.rglob("*")):
+            tf.add(item, arcname=str(item.relative_to(prof)), recursive=False)
+
+    print(str(out))
+    log(f"perfil '{args.name}' exportado para {out}")
+
+
+def cmd_import(args):
+    """Importa um .tar.gz de perfil para a pasta de perfis."""
+    src = Path(args.file).expanduser()
+    if not src.is_file():
+        raise SystemExit(f"arquivo nao encontrado: {src}")
+    try:
+        tf = tarfile.open(src, "r:gz")
+    except Exception as e:
+        raise SystemExit(f"arquivo invalido (nao e .tar.gz): {e}")
+
+    with tf:
+        members = tf.getmembers()
+        names = [m.name for m in members]
+        if "manifest.json" not in names and "settings.toml" not in names:
+            raise SystemExit("pacote nao parece conter um perfil do Noctalia")
+        for m in members:
+            p = Path(m.name)
+            if p.is_absolute() or ".." in p.parts:
+                raise SystemExit(f"pacote com caminho inseguro: {m.name}")
+
+        with tempfile.TemporaryDirectory(prefix="noctalia-import-") as td:
+            tmp = Path(td)
+            tf.extractall(tmp)
+            mf = tmp / "manifest.json"
+            manifest = {}
+            if mf.exists():
+                try: manifest = json.loads(mf.read_text(encoding="utf-8"))
+                except Exception: manifest = {}
+            name = safe_name(args.name or manifest.get("name") or src.stem)
+
+            dest = PROFILES / name
+            if dest.exists() and not getattr(args, "force", False):
+                raise SystemExit(
+                    f"perfil '{name}' ja existe; use --force para sobrescrever"
+                )
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(tmp, dest, dirs_exist_ok=True)
+
+            manifest["name"] = name
+            manifest["imported_at"] = datetime.now().isoformat(timespec="seconds")
+            manifest.pop("exported_at", None)
+            (dest / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+
+    print(str(dest))
+    log(f"perfil '{name}' importado de {src}")
+
+
 # ── list / delete ───────────────────────────────────────────────────────────
 def cmd_list(args):
     if not PROFILES.exists() or not any(PROFILES.iterdir()):
@@ -202,6 +292,8 @@ def main():
     sp = sub.add_parser("apply"); sp.add_argument("name"); sp.set_defaults(func=cmd_apply)
     sp = sub.add_parser("list"); sp.set_defaults(func=cmd_list)
     sp = sub.add_parser("delete"); sp.add_argument("name"); sp.set_defaults(func=cmd_delete)
+    sp = sub.add_parser("export"); sp.add_argument("name"); sp.add_argument("output", nargs="?"); sp.set_defaults(func=cmd_export)
+    sp = sub.add_parser("import"); sp.add_argument("file"); sp.add_argument("name", nargs="?"); sp.add_argument("--force", action="store_true"); sp.set_defaults(func=cmd_import)
     args = ap.parse_args()
     args.func(args)
 

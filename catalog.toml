@@ -1,13 +1,13 @@
 [[plugin]]
 id = "victor/profiles"
 name = "Profiles"
-version = "1.2.0"
-updated_at = 1795450000
+version = "1.3.0"
+updated_at = 1795482747
 added_at = 1795450000
 author = "victor"
 license = "MIT"
 icon = "save"
-description = "Salva e aplica perfis completos de personalizacao do Noctalia (config, widgets, layout, frames, fontes, cores, wallpaper e plugins)."
+description = "Salva e aplica perfis completos de personalizacao do Noctalia (config, widgets, layout, molduras, fontes, cores, wallpaper e plugins). Exporta e importa perfis em .tar.gz."
 plugin_api = 46
 tags = ["system", "backup", "desktop", "personalization"]
 dependencies = []

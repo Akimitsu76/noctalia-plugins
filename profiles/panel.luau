@@ -16,6 +16,7 @@ local CMD = "noctalia-profile"
 local profiles = {}
 local selected = nil
 local nameInput = ""
+local importPath = ""
 local status = "Pronto. Selecione um perfil ou salve a config atual."
 local statusKind = "info" -- info | ok | err
 local pendingDelete = nil
@@ -83,6 +84,21 @@ local function runProfile(args, onDone)
     end)
 end
 
+local function doImport()
+    if busy then return end
+    local path = importPath:gsub("^%s+", ""):gsub("%s+$", "")
+    path = path:gsub('^"', ""):gsub('"$', "")
+    if path == "" then
+        setStatus("Digite o caminho do arquivo .tar.gz.", "err")
+        render()
+        return
+    end
+    runProfile({ "import", path }, function(out)
+        local name = path:match("([^/]+)%.tar%.gz$") or "perfil"
+        setStatus("Importado: " .. name, "ok")
+    end)
+end
+
 local function divider()
     return ui.column({ height = 1, fill = "outline_variant", radius = 0 })
 end
@@ -130,6 +146,17 @@ local function profileRow(p)
             onClick = function() pendingDelete = nil; render() end,
         }))
     else
+        table.insert(children, ui.button({
+            glyph = "download",
+            variant = "ghost",
+            onClick = function()
+                if busy then return end
+                runProfile({ "export", p.name }, function(out)
+                    local path = out:match("(%S+%.tar%.gz)")
+                    setStatus(path and ("Exportado: " .. path) or "Perfil exportado.", "ok")
+                end)
+            end,
+        }))
         table.insert(children, ui.button({
             glyph = "trash",
             variant = "ghost",
@@ -252,6 +279,22 @@ function render()
         ui.label({ text = "SALVAR CONFIGURAÇÃO ATUAL", fontSize = 10, fontWeight = "medium", color = "on_surface_variant" }),
         nameField,
         actions,
+        divider(),
+        ui.label({ text = "IMPORTAR PERFIL (.tar.gz)", fontSize = 10, fontWeight = "medium", color = "on_surface_variant" }),
+        ui.row({ gap = 8, align = "center" }, {
+            ui.column({ flexGrow = 1 }, {
+                ui.input({
+                    key = "import-path",
+                    placeholder = "caminho do .tar.gz…",
+                    onChange = function(v) importPath = v or "" end,
+                    onSubmit = function(v)
+                        importPath = v or importPath
+                        doImport()
+                    end,
+                }),
+            }),
+            ui.button({ text = "IMPORTAR", glyph = "upload", variant = "ghost", onClick = doImport }),
+        }),
         ui.label({ text = status, fontSize = 11, color = statusColor(), maxLines = 2 }),
     }))
 end

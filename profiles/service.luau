@@ -4,6 +4,8 @@
 --   noctalia msg plugin victor/profiles:service all "apply <nome>"
 --   noctalia msg plugin victor/profiles:service all "list"
 --   noctalia msg plugin victor/profiles:service all "delete <nome>"
+--   noctalia msg plugin victor/profiles:service all "export <nome> [arquivo.tar.gz]"
+--   noctalia msg plugin victor/profiles:service all "import <arquivo.tar.gz> [nome]"
 
 local CMD = "noctalia-profile"
 
@@ -34,7 +36,11 @@ local function split(s)
     return parts
 end
 
-local function handle(action, name)
+local function clean(out)
+    return (tostring(out or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function handle(action, name, extra)
     log("acao=" .. tostring(action) .. " nome=" .. tostring(name))
     if action == "save" then
         if not name or name == "" then notify("Profiles", "uso: save <nome>"); return end
@@ -55,25 +61,44 @@ local function handle(action, name)
         run({"delete", name}, function(out)
             notify("Perfil removido", name)
         end)
+    elseif action == "export" then
+        if not name or name == "" then notify("Profiles", "uso: export <nome> [arquivo.tar.gz]"); return end
+        local args = {"export", name}
+        if extra and extra ~= "" then table.insert(args, extra) end
+        run(args, function(out)
+            local path = clean(out):match("(%S+%.tar%.gz)")
+            notify("Perfil exportado", path or clean(out))
+        end)
+    elseif action == "import" then
+        if not name or name == "" then notify("Profiles", "uso: import <arquivo.tar.gz> [nome]"); return end
+        local args = {"import", name}
+        if extra and extra ~= "" then table.insert(args, extra) end
+        run(args, function(out)
+            notify("Perfil importado", clean(out))
+        end)
     else
-        notify("Profiles", "acao desconhecida: " .. tostring(action) .. "\nuse save|apply|list|delete")
+        notify("Profiles", "acao desconhecida: " .. tostring(action) ..
+            "\nuse save|apply|list|delete|export|import")
     end
 end
 
 function onIpc(event, payload)
-    local action, name
+    local action, name, extra
     if type(payload) == "table" then
         action = payload.action or event
-        name = payload.name
+        name = payload.name or payload.file
+        extra = payload.extra or payload.output
     else
         local parts = split(event)
         action = parts[1]
         name = parts[2]
+        extra = parts[3]
         if type(payload) == "string" and payload ~= "" then
-            name = name or payload
+            if not name then name = payload
+            elseif not extra then extra = payload end
         end
     end
-    handle(action, name)
+    handle(action, name, extra)
 end
 
 function onConfigChanged() end
