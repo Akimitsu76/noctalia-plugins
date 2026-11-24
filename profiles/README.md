@@ -36,8 +36,10 @@ Antes de sobrescrever qualquer coisa, o CLI `noctalia-profile`:
 
 1. lê o manifesto e descobre as fontes/plugins declarados;
 2. adiciona cada fonte git/paths que não existe e roda `plugins update <fonte>`;
-3. habilita cada plugin faltante e confirma que ele apareceu materializado
-   (timeout de 30 s);
+3. **pula imediatamente** qualquer plugin já `enabled` na máquina (sem chamar
+   `plugins enable` e sem esperar `materialized/`, que nem sempre é criado);
+   habilita apenas os ausentes/`disabled` e espera no máximo **5 s** pela
+   confirmação. Falhas viram `MISSING_PLUGINS=` e nunca impedem o remapeamento;
 4. copia plugins `path` embarcados para
    `~/.local/share/noctalia/user-plugins/<fonte>` e reescreve o `location` no
    `settings.toml`;
@@ -103,7 +105,9 @@ noctalia msg panel-toggle victor/profiles:profiles
 | **PROCURAR ARQUIVO** | abre o seletor de arquivos (zenity) para escolher o `.tar.gz` |
 | **IMPORTAR** | instala fontes/plugins, atualiza a lista e **aplica automaticamente** |
 
-O painel mostra a fase atual e, no final, quantos widgets foram restaurados,
+A fase de plugins é best-effort para caber no timeout de 60 s do
+`noctalia.runAsync` (limite da API — 120 s não é aceito). O painel mostra a fase
+alcançada e, no final, quantos widgets foram restaurados,
 quantos plugins foram instalados, qual remapeamento de monitor ocorreu e o que
 faltou. Erros trazem a causa concreta (fonte não adicionada, plugin que não
 apareceu após `enable`, output inexistente, asset ausente etc.) — nunca apenas

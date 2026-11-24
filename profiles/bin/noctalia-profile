@@ -727,36 +727,74 @@ def install_sources(prof, manifest, args, installed, rewrites):
 
 
 def plugin_materialized(pid):
-    """Verifica se o plugin está materializado em alguma fonte."""
+    """Aviso apenas: a ausência do diretório NÃO bloqueia o apply."""
     slug = pid.split("/", 1)[-1]
     if not MATERIALIZED.exists():
-        return True  # máquina sem cache: deixa o enable decidir
+        return True  # máquina sem cache: nada a exigir
     return any(d.is_dir() and d.name == slug for d in MATERIALIZED.glob("*/*"))
 
 
+def plugin_is_local(info, pid, manifest):
+    """Plugins [local] e os vindos de source `path` já estão materializados."""
+    if "[local]" in info:
+        return True
+    path_sources = {str(s.get("name", "")) for s in
+                    ((manifest.get("plugins") or {}).get("sources") or [])
+                    if str(s.get("kind", "")) == "path"}
+    return pid.split("/", 1)[0] in path_sources
+
+
 def install_plugins(manifest, installed, missing):
+    """Habilita o que falta sem travar no que já está `enabled`.
+
+    Um plugin habilitado é considerado pronto mesmo sem diretório em
+    materialized/ (o Noctalia nem sempre cria esse cache). Enable só é chamado
+    para ids ausentes/disabled; a confirmação pós-enable dura no máximo 5s e
+    qualquer falha vira MISSING_PLUGINS — nunca aborta o apply.
+    """
     wanted = [p for p in (manifest.get("plugins", {}).get("enabled") or []) if "/" in p]
-    state = list_plugins()
+    try:
+        state = list_plugins()
+    except Exception as e:
+        emit(f"AVISO=não foi possível listar plugins: {e}")
+        missing.extend(p for p in wanted if p not in missing)
+        return wanted
+
     for i, pid in enumerate(wanted, 1):
         phase(f"instalando plugins {i}/{len(wanted)}: {pid}")
         info = state.get(pid, "")
-        if "enabled" in info and plugin_materialized(pid):
+        if "enabled" in info:
+            # Já habilitado: nada de enable, nada de espera.
+            if not plugin_is_local(info, pid, manifest) and not plugin_materialized(pid):
+                emit(f"AVISO=plugin {pid} habilitado sem diretório em materialized/ (ignorado)")
             continue
+
+        local = plugin_is_local(info, pid, manifest)
         ok, out, err = run_cmd(["noctalia", "msg", "plugins", "enable", pid], timeout=30)
         if not ok:
-            emit(f"ERROR=falha ao habilitar plugin {pid}: {err or out}")
+            emit(f"AVISO=falha ao habilitar plugin {pid}: {err or out}")
             missing.append(pid)
             continue
-        # confirma com timeout de 30s (habilitado E materializado)
-        for _ in range(30):
-            state = list_plugins()
-            if "enabled" in state.get(pid, "") and plugin_materialized(pid):
-                installed.append(pid)
+
+        appeared = False
+        for _ in range(5):
+            try:
+                state = list_plugins()
+            except Exception as e:
+                emit(f"AVISO=não foi possível conferir plugin {pid}: {e}")
+                break
+            if "enabled" in state.get(pid, ""):
+                appeared = True
                 break
             time.sleep(1)
-        else:
-            emit(f"ERROR=plugin {pid} não apareceu após enable")
+        if not appeared:
+            emit(f"AVISO=plugin {pid} não apareceu como enabled após enable")
             missing.append(pid)
+            continue
+
+        installed.append(pid)
+        if not local and not plugin_materialized(pid):
+            emit(f"AVISO=plugin {pid} habilitado sem diretório em materialized/ (ignorado)")
     return wanted
 
 
@@ -843,9 +881,16 @@ def apply_profile(name, args):
     backup = make_backup(name)
     rewrites = {}
     try:
-        phase(f"instalando plugins 0/{len(manifest.get('plugins', {}).get('enabled') or [])}")
-        install_sources(prof, manifest, args, installed, rewrites)
-        wanted = install_plugins(manifest, installed, missing)
+        # Fase de plugins é best-effort: qualquer falha aqui vira MISSING_PLUGINS,
+        # nunca impede o remapeamento e a restauração dos widgets.
+        wanted = [p for p in (manifest.get("plugins", {}).get("enabled") or []) if "/" in p]
+        phase(f"instalando plugins 0/{len(wanted)}")
+        try:
+            install_sources(prof, manifest, args, installed, rewrites)
+            wanted = install_plugins(manifest, installed, missing)
+        except Exception as e:
+            emit(f"AVISO=fase de plugins incompleta: {e}")
+            missing.extend(p for p in wanted if p not in missing)
 
         # Tipos de widget vindos de plugin precisam do plugin habilitado.
         widget_types = (manifest.get("desktop_widgets") or {}).get("widget_types") or []
@@ -931,8 +976,12 @@ def apply_profile(name, args):
             if not ok:
                 emit(f"AVISO=gerador de molduras falhou: {err or out}")
 
-        # verificação final
-        final_state = list_plugins()
+        # verificação final (não pode derrubar um apply já concluído)
+        try:
+            final_state = list_plugins()
+        except Exception as e:
+            emit(f"AVISO=não foi possível conferir plugins no final: {e}")
+            final_state = {}
         for pid in wanted:
             if "enabled" not in final_state.get(pid, ""):
                 if pid not in missing:

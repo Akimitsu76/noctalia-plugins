@@ -92,6 +92,8 @@ end
 local function run(args, done)
     -- Avisa no log em qual fase o CLI está (o runAsync devolve só o resultado
     -- final, mas as linhas PHASE= vão todas no log ao terminar).
+    -- timeoutMs é limitado a 60000 pela API; a fase de plugins do CLI é
+    -- best-effort para o apply caber nesse limite.
     noctalia.runAsync(cliArgv(args), function(r)
         local ok, out, err = resultInfo(r)
         local info = machineInfo(out)
@@ -128,6 +130,7 @@ end
 
 local function summary(info)
     local parts = {}
+    if info.lastPhase ~= "" then table.insert(parts, "fase: " .. info.lastPhase) end
     if info.widgets > 0 then
         table.insert(parts, info.widgets .. " widget(s) restaurado(s)")
     end

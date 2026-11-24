@@ -42,8 +42,10 @@ Mod+Shift+P { spawn-sh "noctalia msg panel-toggle victor/profiles:profiles"; }
 barra, tema, wallpaper, shell), dados dos plugins, molduras, plugins locais,
 assets referenciados e a revisão de cada fonte git.
 
-No import em outra máquina, o CLI adiciona as fontes que faltam, habilita os
-plugins, copia plugins `path` para `~/.local/share/noctalia/user-plugins/`,
+No import em outra máquina, o CLI adiciona as fontes que faltam, **pula plugins
+já habilitados sem esperar cache `materialized/`**, habilita apenas os ausentes
+(espera máxima de 5 s), copia plugins `path` para
+`~/.local/share/noctalia/user-plugins/`,
 detecta os monitores atuais e **remapeia outputs** (`DP-3` → `eDP-1`, por
 exemplo, ajustando resolução, posição dos widgets e wallpaper por monitor), e
 **só depois** restaura a configuração. Tudo com backup, `--dry-run` e rollback.

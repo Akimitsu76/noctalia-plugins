@@ -39,6 +39,7 @@
     "imported_applied": "Imported and applied: {name}{extra}",
     "imported_applying": "Imported: {name}. Applying…",
     "applied": "Profile '{name}' applied.{extra}",
+    "phase_done": " · phase: {phase}",
     "widgets_restored": " · {count} widget(s) restored",
     "plugins_installed": " · {count} plugin(s) installed",
     "output_remap": " · monitors: {map}",

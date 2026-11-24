@@ -190,6 +190,10 @@ end
 -- Resumo único usado por import/apply: widgets, plugins e remapeamento.
 local function describeResult(info)
     local parts = {}
+    if info.lastPhase ~= "" then
+        table.insert(parts, tr("phase_done", { phase = info.lastPhase },
+            " · fase: " .. info.lastPhase))
+    end
     if info.widgets > 0 then
         table.insert(parts, tr("widgets_restored", { count = info.widgets },
             info.widgets .. " widget(s) restaurado(s)"))
@@ -214,6 +218,9 @@ local function runProfile(args, onDone, initialStatus)
     busy = true
     setStatus(initialStatus or "Executando…", "info")
     render()
+    -- runAsync limita timeoutMs a [50, 60000]; 120s não é aceito pela API.
+    -- A fase de plugins do CLI é best-effort (<=5s por plugin ausente), então
+    -- o apply cabe em 60s. As linhas PHASE= reais são logadas e resumidas.
     noctalia.runAsync(cliArgv(args), function(r)
         busy = false
         local ok, out, err = resultInfo(r)
