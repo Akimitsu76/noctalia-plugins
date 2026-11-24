@@ -39,9 +39,13 @@ noctalia-profile export desktop-principal ~/Downloads/meu.tar.gz
 noctalia-profile import ~/Downloads/meu.tar.gz meu-tema --force
 ```
 
+O import **aplica o perfil automaticamente** e imprime `PROFILE=<nome>` /
+`APPLIED=1`. Use `--no-apply` para apenas instalar.
+
 O pacote `.tar.gz` inclui `manifest.json`, `config/`, `settings.toml`,
 `plugins-data/` e `wallpapers/`. Também dá pelo painel: ícone de download em
-cada perfil e campo de importação.
+cada perfil, botão **PROCURAR ARQUIVO** (seletor zenity) e importação com
+atualização da lista + aplicação automática.
 
 ## ✦ Atualizar
 

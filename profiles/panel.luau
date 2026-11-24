@@ -12,6 +12,21 @@ local PROFILES_DIR = (type(configuredDir) == "string" and configuredDir ~= "")
     and noctalia.expandPath(configuredDir)
     or noctalia.expandPath("~/.local/state/noctalia/profiles")
 local CMD = "noctalia-profile"
+local PANEL_ID = "victor/profiles:profiles"
+
+-- O seletor de arquivos roda fora do painel (o zenity rouba o foco e o painel
+-- fecha). O caminho escolhido fica num "stash" e é consumido em onOpen.
+local PICK_DIR = (noctalia.pluginDataDir and noctalia.pluginDataDir())
+    or (HOME .. "/.local/state/noctalia/plugins/data/victor/profiles")
+local PICK_STASH = PICK_DIR .. "/pick-import"
+
+local function trim(s)
+    return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function shellQuote(s)
+    return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
+end
 
 local profiles = {}
 local selected = nil
@@ -71,32 +86,79 @@ local function runProfile(args, onDone)
     render()
     noctalia.runAsync({ CMD, table.unpack(args) }, function(r)
         busy = false
-        local out = ""
+        local out, err = "", ""
         if type(r) == "table" then
-            out = (r.stdout or "")
-            if r.stderr and r.stderr ~= "" then out = out .. " " .. r.stderr end
+            out = r.stdout or ""
+            err = r.stderr or ""
         elseif type(r) == "string" then
             out = r
         end
+        -- Sem checar exitCode, uma falha do CLI aparecia como sucesso.
+        local ok = (type(r) ~= "table")
+            or (tonumber(r.exitCode) == 0 and not r.timedOut)
         refreshProfiles()
-        if onDone then onDone(out) end
+        if onDone then onDone(out, ok) end
+        if not ok then
+            local msg = trim(err):match("[^\r\n]+")
+                or trim(out):match("[^\r\n]+")
+                or "comando falhou"
+            setStatus("Erro: " .. msg, "err")
+        end
         render()
     end)
 end
 
-local function doImport()
+local function doImport(pathArg)
     if busy then return end
-    local path = importPath:gsub("^%s+", ""):gsub("%s+$", "")
-    path = path:gsub('^"', ""):gsub('"$', "")
+    local path = trim(pathArg or importPath):gsub('^"', ""):gsub('"$', "")
     if path == "" then
-        setStatus("Digite o caminho do arquivo .tar.gz.", "err")
+        setStatus("Escolha um arquivo .tar.gz.", "err")
         render()
         return
     end
-    runProfile({ "import", path }, function(out)
-        local name = path:match("([^/]+)%.tar%.gz$") or "perfil"
-        setStatus("Importado: " .. name, "ok")
+    path = noctalia.expandPath(path)
+    importPath = path
+    runProfile({ "import", path }, function(out, ok)
+        if not ok then return end
+        -- O CLI imprime o nome real do perfil (pode vir do manifesto, nao do arquivo).
+        local name = trim(out:match("PROFILE=([^\r\n]+)") or "")
+        if name == "" then name = path:match("([^/]+)%.tar%.gz$") or "perfil" end
+        selected = name
+        setStatus((out:match("APPLIED=1") and "Importado e aplicado: " or "Importado: ") .. name, "ok")
     end)
+end
+
+local function pickFile()
+    if busy then return end
+    if not noctalia.commandExists or not noctalia.commandExists("zenity") then
+        setStatus("zenity nao encontrado — digite o caminho do .tar.gz.", "err")
+        render()
+        return
+    end
+    local start = trim(importPath)
+    start = (start ~= "" and noctalia.expandPath(start)
+        or noctalia.expandPath("~/Documents/noctalia-profiles") .. "/")
+    -- `;` antes de panel-open: cancelar o dialog também devolve o painel.
+    local cmd = "mkdir -p " .. shellQuote(PICK_DIR)
+        .. " && p=$(zenity --file-selection"
+        .. " --title=" .. shellQuote("Selecionar perfil .tar.gz")
+        .. " --filename=" .. shellQuote(start)
+        .. " --file-filter=" .. shellQuote("Perfis Noctalia (*.tar.gz) | *.tar.gz")
+        .. ") && printf '%s' \"$p\" > " .. shellQuote(PICK_STASH)
+        .. "; noctalia msg panel-open " .. shellQuote(PANEL_ID)
+    noctalia.runAsync(cmd)
+    setStatus("Escolha o arquivo na janela que abriu…", "info")
+    render()
+end
+
+local function consumePick()
+    if not noctalia.fileExists(PICK_STASH) then return end
+    local path = trim(noctalia.readFile(PICK_STASH) or "")
+    pcall(noctalia.removeFile, PICK_STASH)
+    if path ~= "" then
+        importPath = path
+        doImport(path)
+    end
 end
 
 local function divider()
@@ -134,7 +196,8 @@ local function profileRow(p)
             variant = "primary",
             onClick = function()
                 pendingDelete = nil
-                runProfile({ "delete", p.name }, function(out)
+                runProfile({ "delete", p.name }, function(out, ok)
+                    if not ok then return end
                     setStatus("Perfil '" .. p.name .. "' removido.", "ok")
                     if selected == p.name then selected = nil end
                 end)
@@ -151,7 +214,8 @@ local function profileRow(p)
             variant = "ghost",
             onClick = function()
                 if busy then return end
-                runProfile({ "export", p.name }, function(out)
+                runProfile({ "export", p.name }, function(out, ok)
+                    if not ok then return end
                     local path = out:match("(%S+%.tar%.gz)")
                     setStatus(path and ("Exportado: " .. path) or "Perfil exportado.", "ok")
                 end)
@@ -232,7 +296,8 @@ function render()
                 if n == "" then
                     setStatus("Digite um nome para o perfil.", "err"); render(); return
                 end
-                runProfile({ "save", n }, function(out)
+                runProfile({ "save", n }, function(out, ok)
+                    if not ok then return end
                     setStatus("Perfil '" .. n .. "' salvo.", "ok")
                     selected = n
                 end)
@@ -248,7 +313,8 @@ function render()
                     setStatus("Selecione um perfil na lista.", "err"); render(); return
                 end
                 local target = selected
-                runProfile({ "apply", target }, function(out)
+                runProfile({ "apply", target }, function(out, ok)
+                    if not ok then return end
                     setStatus("Perfil '" .. target .. "' aplicado.", "ok")
                 end)
             end,
@@ -262,7 +328,8 @@ function render()
         onSubmit = function(v)
             nameInput = v or nameInput
             if nameInput ~= "" and not busy then
-                runProfile({ "save", nameInput }, function()
+                runProfile({ "save", nameInput }, function(out, ok)
+                    if not ok then return end
                     setStatus("Perfil '" .. nameInput .. "' salvo.", "ok")
                     selected = nameInput
                 end)
@@ -281,19 +348,18 @@ function render()
         actions,
         divider(),
         ui.label({ text = "IMPORTAR PERFIL (.tar.gz)", fontSize = 10, fontWeight = "medium", color = "on_surface_variant" }),
-        ui.row({ gap = 8, align = "center" }, {
-            ui.column({ flexGrow = 1 }, {
-                ui.input({
-                    key = "import-path",
-                    placeholder = "caminho do .tar.gz…",
-                    onChange = function(v) importPath = v or "" end,
-                    onSubmit = function(v)
-                        importPath = v or importPath
-                        doImport()
-                    end,
-                }),
-            }),
-            ui.button({ text = "IMPORTAR", glyph = "upload", variant = "ghost", onClick = doImport }),
+        ui.input({
+            key = "import-path",
+            placeholder = "caminho do .tar.gz…",
+            onChange = function(v) importPath = v or "" end,
+            onSubmit = function(v)
+                importPath = v or importPath
+                doImport()
+            end,
+        }),
+        ui.row({ gap = 8, align = "stretch" }, {
+            ui.button({ text = "PROCURAR ARQUIVO", glyph = "folder", variant = "ghost", onClick = pickFile }),
+            ui.button({ text = "IMPORTAR", glyph = "upload", variant = "primary", onClick = function() doImport() end }),
         }),
         ui.label({ text = status, fontSize = 11, color = statusColor(), maxLines = 2 }),
     }))
@@ -307,4 +373,5 @@ function onOpen(_context)
     end
     setStatus("Pronto.", "info")
     render()
+    consumePick()
 end

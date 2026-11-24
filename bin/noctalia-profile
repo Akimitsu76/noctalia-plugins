@@ -15,7 +15,7 @@ Uso:
   noctalia-profile list
   noctalia-profile delete <nome>
   noctalia-profile export <nome> [arquivo.tar.gz]
-  noctalia-profile import <arquivo.tar.gz> [nome] [--force]
+  noctalia-profile import <arquivo.tar.gz> [nome] [--force] [--no-apply]
 """
 import argparse, json, os, re, shutil, socket, subprocess, sys, tarfile, tempfile
 from datetime import datetime
@@ -128,8 +128,9 @@ def cmd_save(args):
     log(f"perfil '{args.name}' salvo em {prof}")
 
 # ── apply ───────────────────────────────────────────────────────────────────
-def cmd_apply(args):
-    prof = PROFILES / args.name
+def apply_profile(name):
+    """Aplica um perfil ja salvo; usado por `apply` e automaticamente por `import`."""
+    prof = PROFILES / safe_name(name)
     if not prof.is_dir():
         raise SystemExit(f"perfil nao encontrado: {prof}")
     manifest = {}
@@ -178,7 +179,12 @@ def cmd_apply(args):
         log("noctalia recarregado")
     except Exception:
         log("noctalia nao encontrado; recarregue manualmente")
-    log(f"perfil '{args.name}' aplicado")
+    log(f"perfil '{name}' aplicado")
+    return name
+
+
+def cmd_apply(args):
+    apply_profile(args.name)
 
 # ── export / import ─────────────────────────────────────────────────────────
 def cmd_export(args):
@@ -250,14 +256,22 @@ def cmd_import(args):
                 shutil.rmtree(dest)
             shutil.copytree(tmp, dest, dirs_exist_ok=True)
 
+            imported_at = datetime.now().isoformat(timespec="seconds")
             manifest["name"] = name
-            manifest["imported_at"] = datetime.now().isoformat(timespec="seconds")
+            manifest["imported_at"] = imported_at
+            # mantem saved_at para o painel ordenar e mostrar a data corretamente
+            manifest.setdefault("saved_at", imported_at)
             manifest.pop("exported_at", None)
             (dest / "manifest.json").write_text(
                 json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
             )
 
     print(str(dest))
+    print(f"PROFILE={name}")
+    # importar so para deixa-lo inutil: aplica automaticamente, como o usuario espera.
+    if not getattr(args, "no_apply", False):
+        apply_profile(name)
+        print("APPLIED=1")
     log(f"perfil '{name}' importado de {src}")
 
 
@@ -293,7 +307,7 @@ def main():
     sp = sub.add_parser("list"); sp.set_defaults(func=cmd_list)
     sp = sub.add_parser("delete"); sp.add_argument("name"); sp.set_defaults(func=cmd_delete)
     sp = sub.add_parser("export"); sp.add_argument("name"); sp.add_argument("output", nargs="?"); sp.set_defaults(func=cmd_export)
-    sp = sub.add_parser("import"); sp.add_argument("file"); sp.add_argument("name", nargs="?"); sp.add_argument("--force", action="store_true"); sp.set_defaults(func=cmd_import)
+    sp = sub.add_parser("import"); sp.add_argument("file"); sp.add_argument("name", nargs="?"); sp.add_argument("--force", action="store_true"); sp.add_argument("--no-apply", action="store_true", help="apenas instala o perfil, nao aplica"); sp.set_defaults(func=cmd_import)
     args = ap.parse_args()
     args.func(args)
 

@@ -42,7 +42,12 @@ noctalia msg panel-toggle victor/profiles:profiles
 | **SALVAR ATUAL** | salva a config atual com o nome digitado |
 | **APLICAR** | restaura o perfil selecionado |
 | ícone de download na linha | exporta aquele perfil para `~/Documents/noctalia-profiles/` |
-| **IMPORTAR** | lê um `.tar.gz` e instala como perfil |
+| **PROCURAR ARQUIVO** | abre o seletor de arquivos (zenity) para escolher o `.tar.gz` |
+| **IMPORTAR** | lê um `.tar.gz`, instala o perfil, atualiza a lista e **aplica automaticamente** |
+
+Se o `zenity` não estiver instalado, o campo de caminho continua funcionando.
+Falhas do comando (arquivo inexistente, nome duplicado) agora aparecem em
+vermelho no painel — não são mais anunciadas como "importado".
 
 ### Exportar / importar pela linha de comando
 
@@ -53,11 +58,14 @@ noctalia-profile export desktop-principal
 # exporta para um caminho específico
 noctalia-profile export desktop-principal ~/Downloads/meu-tema.tar.gz
 
-# importa (o nome vem do manifesto do pacote)
+# importa (o nome vem do manifesto) e APLICA automaticamente
 noctalia-profile import ~/Downloads/meu-tema.tar.gz
 
 # importa com outro nome / sobrescreve
 noctalia-profile import ~/Downloads/meu-tema.tar.gz meu-tema --force
+
+# apenas instala o perfil, sem aplicar
+noctalia-profile import ~/Downloads/meu-tema.tar.gz --no-apply
 ```
 
 O pacote contém `manifest.json`, `config/`, `settings.toml`, `plugins-data/` e
